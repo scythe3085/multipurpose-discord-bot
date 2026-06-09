@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Secrets
+.env
+.env.*
+# ...but keep the committed template
+!.env.example
+
+# Runtime data (sqlite DB + WAL/SHM sidecars, created at runtime)
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Runtime-mutated config — these hold live per-server IDs / blocklists and are
+# written by the bot at runtime. Tracked as *.example.json templates instead.
+config/allowed-guilds.json
+config/guild-config.json
+config/vc-prefs.json
+
+# Atomic-write temp files
+*.json.tmp
+
+# Logs / editor cruft
+*.log
+.DS_Store

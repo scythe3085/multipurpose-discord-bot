@@ -1,0 +1,48 @@
+{
+  "name": "multipurpose-discord-bot",
+  "version": "1.6.0",
+  "description": "Multi-purpose Discord bot: per-guild config, support tickets, temporary co-owned voice channels, member verification, and YouTube/Twitch live alerts.",
+  "main": "index.js",
+  "type": "commonjs",
+  "license": "MIT",
+  "author": "scythe3085",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scythe3085/discord-bots.git",
+    "directory": "multipurpose-discord-bot"
+  },
+  "keywords": [
+    "discord",
+    "discord-bot",
+    "discord.js",
+    "tickets",
+    "voice-channels",
+    "verification",
+    "youtube-alerts",
+    "twitch-alerts"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "deploy-commands": "node deploy-commands.js",
+    "test": "node --test",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.4.5",
+    "fast-xml-parser": "^4.5.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "eslint": "^9.13.0",
+    "globals": "^15.11.0",
+    "prettier": "^3.3.3"
+  }
+}
