@@ -70,12 +70,17 @@ async function requestApproval(client, guild) {
   if (deps.whitelist.isAllowed(guild.id)) return;
   if (pendingTimers.has(guild.id)) return; // already asked, waiting on the owner
 
+  // Claim the slot synchronously BEFORE any await so a concurrent
+  // guildCreate + startup sweep can't both DM for the same guild.
+  pendingTimers.set(guild.id, null);
+
   const ownerId = deps.getOwnerId();
   if (!ownerId) {
     console.log(
       `⚠️ Joined unauthorized guild ${guild.name} (${guild.id}) and OWNER_ID is unset — leaving. ` +
         `Tip: set ALLOWED_GUILD_IDS in .env to pre-allow your server.`,
     );
+    pendingTimers.delete(guild.id);
     await guild.leave().catch(err => console.error('⚠️ Failed to leave guild:', err));
     return;
   }
@@ -91,6 +96,7 @@ async function requestApproval(client, guild) {
       `⚠️ Could not DM the owner to approve ${guild.name} (${guild.id}) — leaving. ` +
         `(${err.message}) Tip: set ALLOWED_GUILD_IDS in .env to pre-allow your server.`,
     );
+    pendingTimers.delete(guild.id);
     await guild.leave().catch(e => console.error('⚠️ Failed to leave guild:', e));
     return;
   }
@@ -128,11 +134,11 @@ async function handleWhitelistInteraction(interaction) {
     return interaction.reply({ content: '🚫 Only the bot owner can do this.' });
   }
 
-  clearPending(guildId);
   const guild = interaction.client.guilds.cache.get(guildId);
   const label = guild ? `**${guild.name}**` : `\`${guildId}\``;
 
   if (action === 'wl_approve') {
+    clearPending(guildId);
     deps.whitelist.add(guildId);
     return interaction.update({
       content:
@@ -144,14 +150,26 @@ async function handleWhitelistInteraction(interaction) {
   }
 
   if (action === 'wl_deny') {
-    if (guild) {
-      await guild.leave().catch(err => console.error('⚠️ Failed to leave denied guild:', err));
+    // A stale Deny (old duplicate card) must not yank the bot out of a guild
+    // that was since approved — allow-list and membership would desync.
+    if (deps.whitelist.isAllowed(guildId)) {
+      return interaction.update({
+        content: `ℹ️ ${label} is already on the allow-list — use /removeguild to remove and leave it.`,
+        embeds: [],
+        components: [],
+      });
     }
-    return interaction.update({
-      content: `🚪 Denied ${label} — the bot has left.`,
+
+    clearPending(guildId);
+    await interaction.update({
+      content: `🚪 Denied ${label} — leaving the server.`,
       embeds: [],
       components: [],
     });
+    if (guild) {
+      await guild.leave().catch(err => console.error('⚠️ Failed to leave denied guild:', err));
+    }
+    return;
   }
 }
 
@@ -160,5 +178,6 @@ module.exports = {
   sweepUnapproved,
   handleWhitelistInteraction,
   parseWlCustomId,
+  clearPending,
   _setDepsForTests,
 };

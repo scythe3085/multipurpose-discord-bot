@@ -89,6 +89,12 @@ client.on('guildCreate', guild => {
   }
 });
 
+// If the bot leaves (or is kicked from) a guild, drop any pending approval so
+// a rejoin within 24h gets a fresh card and full window.
+client.on(Events.GuildDelete, guild => {
+  guildApproval.clearPending(guild.id);
+});
+
 // ====== INTERACTION ROUTER ======
 // Component & modal interactions (buttons, select menus, modal submits) are
 // dispatched by their customId prefix. Each system owns a unique customId

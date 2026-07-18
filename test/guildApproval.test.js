@@ -85,3 +85,15 @@ test('non-owner is rejected without side effects', async () => {
   assert.strictEqual(i.calls.update, null);
   assert.match(i.calls.reply.content, /not allowed|owner/i);
 });
+
+test('stale deny on an already-approved guild does not leave it', async () => {
+  ga._setDepsForTests({
+    whitelist: { add: () => true, isAllowed: () => true },
+    isOwner: () => true,
+  });
+  const guild = fakeGuild('444');
+  const i = fakeInteraction({ customId: 'wl_deny:444', userId: 'owner', guild });
+  await ga.handleWhitelistInteraction(i);
+  assert.strictEqual(guild.left, false);
+  assert.match(i.calls.update.content, /already on the allow-list/i);
+});
