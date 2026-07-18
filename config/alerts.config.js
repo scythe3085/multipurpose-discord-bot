@@ -44,6 +44,14 @@ module.exports = {
   // Refresh stored Twitch profile avatars this often (daily).
   TWITCH_AVATAR_REFRESH_MS: 24 * 60 * 60 * 1000,
 
+  // WebSub (YouTube push). Only active when WEBSUB_CALLBACK_URL is set in .env.
+  WEBSUB: {
+    HUB_URL: 'https://pubsubhubbub.appspot.com/',
+    LEASE_SECONDS: 828000, // hub max (~9.6 days)
+    RENEW_CHECK_MS: 60 * 60 * 1000, // hourly expiry check
+    RENEW_MARGIN_MS: 24 * 60 * 60 * 1000, // renew when <24h of lease left
+  },
+
   // Embed accent colors per alert type
   COLORS: {
     youtube: { live: 0xff0000, shorts: 0xff2d55, vod: 0x3ba3ff },

@@ -14,6 +14,7 @@ const crypto = require('node:crypto');
 const cfg = require('../../config/alerts.config.js');
 const q = require('./queries.js');
 const poller = require('./poller.js');
+const websub = require('./websub.js');
 const yt = require('./providers/youtube.js');
 const tw = require('./providers/twitch.js');
 const { safeJsonParse, uniq, clampArray, formatTemplate, displayType } = require('./utils.js');
@@ -43,6 +44,7 @@ async function initAlertsSystem(client) {
   poller.setClient(client);
   poller.validateAlertsEnv();
   poller.startPollers();
+  websub.init(poller.postAlert); // no-op unless WEBSUB_CALLBACK_URL is set
 }
 
 // ---------------- Slash command handlers ----------------
@@ -152,6 +154,8 @@ async function alertsAdd(interaction) {
       customTemplate: null,
       avatarUrl,
     });
+
+    websub.subscribeChannel(channelId);
 
     return interaction.editReply({
       content:
@@ -285,6 +289,7 @@ async function alertsRemove(interaction) {
   }
 
   q.deleteSubscription(id, interaction.guildId);
+  if (row.provider === 'youtube') websub.unsubscribeChannel(row.sourceId);
 
   return interaction.reply({
     content: `\u2705 Removed alerts subscription \`${id}\`.`,

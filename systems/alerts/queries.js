@@ -107,6 +107,12 @@ function setMentionRoles(id, guildId, rolesJson) {
   );
 }
 
+function getSubsForSource(provider, sourceId) {
+  return db
+    .prepare(`SELECT * FROM subscriptions WHERE provider=? AND sourceId=? AND enabled=1`)
+    .all(provider, sourceId);
+}
+
 function getDistinctSourceIds(provider) {
   return db
     .prepare(`SELECT DISTINCT sourceId FROM subscriptions WHERE provider=? AND enabled=1`)
@@ -129,6 +135,7 @@ module.exports = {
   setLastLiveAlert,
   pruneSeenItems,
   getSubsForProvider,
+  getSubsForSource,
   countGuildSubs,
   subscriptionExists,
   getSubForGuild,

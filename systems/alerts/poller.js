@@ -7,6 +7,7 @@
 const cfg = require('../../config/alerts.config.js');
 const q = require('./queries.js');
 const tw = require('./providers/twitch.js');
+const websub = require('./websub.js');
 const { processYoutubeChannel } = require('./youtubePipeline.js');
 const { buildTwitchEmbed } = require('./embeds.js');
 const {
@@ -213,7 +214,8 @@ function startPollers() {
   if (pruneTimer) clearInterval(pruneTimer);
   if (avatarTimer) clearInterval(avatarTimer);
 
-  youtubeTimer = setInterval(() => pollYoutube().catch(() => {}), cfg.YOUTUBE_POLL_MS);
+  const youtubePollMs = websub.isEnabled() ? cfg.YOUTUBE_POLL_MS_WEBSUB : cfg.YOUTUBE_POLL_MS;
+  youtubeTimer = setInterval(() => pollYoutube().catch(() => {}), youtubePollMs);
   twitchTimer = setInterval(() => pollTwitch().catch(() => {}), cfg.TWITCH_POLL_MS);
   pruneTimer = setInterval(q.pruneSeenItems, cfg.SEEN_PRUNE_INTERVAL_MS);
   avatarTimer = setInterval(
