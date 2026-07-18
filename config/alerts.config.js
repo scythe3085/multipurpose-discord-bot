@@ -1,7 +1,10 @@
 // config/alerts.config.js
 module.exports = {
   // Poll intervals (ms)
-  YOUTUBE_POLL_MS: 2 * 60 * 1000, // 2 min
+  YOUTUBE_POLL_MS: 60 * 1000, // 1 min (channel-deduped + conditional GETs keep this cheap)
+  // Fallback interval when WebSub push is active — polling stays on only as a
+  // safety net, so it can be much lazier.
+  YOUTUBE_POLL_MS_WEBSUB: 5 * 60 * 1000, // 5 min
   TWITCH_POLL_MS: 30 * 1000, // 30s (batched single Helix call; dedup + relive cooldown keep it duplicate-safe)
 
   // Limits

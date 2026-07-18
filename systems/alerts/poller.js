@@ -8,8 +8,8 @@ const { EmbedBuilder } = require('discord.js');
 
 const cfg = require('../../config/alerts.config.js');
 const q = require('./queries.js');
-const yt = require('./providers/youtube.js');
 const tw = require('./providers/twitch.js');
+const { processYoutubeChannel } = require('./youtubePipeline.js');
 const {
   safeJsonParse,
   uniq,
@@ -54,102 +54,6 @@ async function postAlert(sub, text, roleIds, embed = null) {
   await channel.send(payload);
 }
 
-// Process one YouTube subscription: fetch its feed and walk the items
-// oldest-first. Items stay serial within a sub so ordering and the per-cycle
-// quota backoff are preserved. `state` is shared across all concurrent subs in
-// a cycle: { posted, quotaHit }. Mutations are plain synchronous writes between
-// awaits, so there's no race even though subs run concurrently.
-async function processYoutubeSub(sub, youtubeApiKey, state) {
-  const types = safeJsonParse(sub.types, []);
-  const roleIds = safeJsonParse(sub.mentionRoleIds, []);
-
-  let feed;
-  try {
-    feed = await yt.fetchYoutubeFeed(sub.sourceId);
-  } catch (err) {
-    console.error('[alerts] YouTube feed error:', sub.guildId, sub.sourceId, err.message);
-    return;
-  }
-
-  const { channelTitle, items } = feed;
-
-  for (const item of items) {
-    // Quota is global to the API key — once any sub trips it, stop classifying
-    // here too rather than burning more quota on calls that will also fail.
-    if (state.quotaHit) break;
-    try {
-      if (q.hasSeen(sub.id, item.videoId)) continue;
-
-      const publishedMs = item.published ? Date.parse(item.published) : null;
-
-      // Ignore videos published before the subscription was created.
-      if (publishedMs && publishedMs <= sub.createdAt) {
-        q.markSeen(sub.id, item.videoId);
-        continue;
-      }
-
-      const classified = await yt.classifyVideo(item.videoId, youtubeApiKey);
-
-      // Classification failed (quota/5xx/network). Do NOT mark seen — retry
-      // next cycle. If it's a quota error, stop classifying this whole cycle
-      // so we don't burn more quota hammering the same failing call.
-      if (classified.error) {
-        if (/\b403\b/.test(classified.error)) state.quotaHit = true;
-        console.error('[alerts] YouTube classify failed:', item.videoId, classified.error);
-        if (state.quotaHit) break;
-        continue;
-      }
-
-      // Scheduled premiere / not-yet-started stream: skip WITHOUT marking
-      // seen so it fires when it actually flips to live.
-      if (classified.type === 'upcoming') continue;
-
-      const type = classified.type || 'vod';
-      const title = classified.title || item.title || 'New upload';
-      const url = item.link;
-
-      if (!types.includes(type)) {
-        q.markSeen(sub.id, item.videoId);
-        continue;
-      }
-
-      // Claim BEFORE posting so a race can't double-send. If another cycle
-      // already claimed it, skip. A send failure after claiming costs at
-      // most one missed alert — preferable to a duplicate.
-      if (!q.markSeen(sub.id, item.videoId)) continue;
-
-      const template =
-        (sub.customTemplate && String(sub.customTemplate).trim().length
-          ? sub.customTemplate
-          : null) ||
-        cfg.TEMPLATES.youtube[type] ||
-        cfg.TEMPLATES.youtube.vod;
-
-      const text = formatTemplate(template, {
-        name: channelTitle,
-        channel: channelTitle, // legacy support
-        title,
-        url,
-        type: displayType(type),
-      });
-
-      const embed = new EmbedBuilder()
-        .setAuthor({ name: String(channelTitle).slice(0, 256) })
-        .setTitle(String(title).slice(0, 256))
-        .setURL(url)
-        .setColor(cfg.COLORS.youtube[type] ?? cfg.COLORS.youtube.vod)
-        .setImage(`https://i.ytimg.com/vi/${encodeURIComponent(item.videoId)}/hqdefault.jpg`)
-        .setTimestamp(publishedMs ? new Date(publishedMs) : new Date());
-
-      await postAlert(sub, text, roleIds, embed);
-      state.posted++;
-    } catch (err) {
-      // One item must never abort the rest of the sub/cycle.
-      console.error('[alerts] YouTube item error:', sub.sourceId, item.videoId, err.message);
-    }
-  }
-}
-
 let youtubeRunning = false;
 
 async function pollYoutube() {
@@ -158,25 +62,40 @@ async function pollYoutube() {
   const youtubeApiKey = process.env.YOUTUBE_API_KEY || '';
   const subs = q.getSubsForProvider('youtube');
 
-  // Shared across the concurrent sub-workers below.
+  // Group by channel so N subs to the same channel cost ONE feed fetch and
+  // ONE classification per new video.
+  const byChannel = new Map();
+  for (const sub of subs) {
+    const list = byChannel.get(sub.sourceId) || [];
+    list.push(sub);
+    byChannel.set(sub.sourceId, list);
+  }
+
+  // Shared across the concurrent channel-workers below.
   const state = { posted: 0, quotaHit: false };
 
   try {
-    // Poll subscriptions concurrently (bounded) instead of one-at-a-time, so the
-    // cycle overlaps network waits rather than summing them. Once quota is hit,
-    // already-running subs wind down (they check state.quotaHit) and no new sub
-    // starts its work.
-    await mapWithConcurrency(subs, cfg.YOUTUBE_POLL_CONCURRENCY, async sub => {
-      if (state.quotaHit) return;
-      await processYoutubeSub(sub, youtubeApiKey, state);
-    });
+    await mapWithConcurrency(
+      [...byChannel.entries()],
+      cfg.YOUTUBE_POLL_CONCURRENCY,
+      async ([channelId, channelSubs]) => {
+        if (state.quotaHit) return;
+        await processYoutubeChannel({
+          channelId,
+          subs: channelSubs,
+          youtubeApiKey,
+          state,
+          postAlert,
+        });
+      },
+    );
   } finally {
     youtubeRunning = false;
   }
 
   if (state.posted || state.quotaHit) {
     console.log(
-      `[alerts] youtube poll: ${subs.length} subs, ${state.posted} posted${state.quotaHit ? ' (Data API quota exhausted — backing off)' : ''}`,
+      `[alerts] youtube poll: ${subs.length} subs / ${byChannel.size} channels, ${state.posted} posted${state.quotaHit ? ' (Data API quota exhausted — backing off)' : ''}`,
     );
   }
 }
@@ -330,5 +249,6 @@ module.exports = {
   validateAlertsEnv,
   pollYoutube,
   pollTwitch,
+  postAlert,
   isWithinReliveCooldown,
 };

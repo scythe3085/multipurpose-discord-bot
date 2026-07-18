@@ -41,7 +41,7 @@ function buildYoutubeEmbed({
       iconURL: avatarUrl || undefined,
     })
     .setTitle(trunc(title || 'New upload', 256))
-    .setURL(url)
+    .setURL(url || undefined)
     .setImage(`https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`)
     .setFooter({
       text:
