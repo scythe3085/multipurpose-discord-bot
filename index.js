@@ -20,6 +20,8 @@ const { handleVerifyInteraction } = require('./systems/verify.js');
 // ---- Alerts System (NEW) ----
 const { initAlertsSystem, handleAlertsInteraction } = require('./systems/alerts/alerts.js');
 
+const guildApproval = require('./systems/guildApproval.js');
+
 // ====== CLIENT SETUP ======
 const client = new Client({
   intents: [
@@ -67,20 +69,23 @@ client.once(Events.ClientReady, async c => {
   } catch (err) {
     console.error('\u26A0\uFE0F Failed to initialise Alerts system:', err);
   }
+
+  // Sweep guilds that joined while the bot was offline (or missed a DM).
+  guildApproval
+    .sweepUnapproved(c)
+    .catch(err => console.error('\u26A0\uFE0F Whitelist sweep failed:', err));
 });
 
 // ====== GUILD WHITELIST PROTECTION ======
+// Non-whitelisted joins now DM the owner an Approve/Leave card instead of
+// insta-leaving; see systems/guildApproval.js.
 client.on('guildCreate', guild => {
-  if (!whitelist.isAllowed(guild.id)) {
-    console.log(
-      `\u26A0\uFE0F Joined unauthorized guild: ${guild.name} (${guild.id}) \u2014 leaving.`,
-    );
-
-    guild
-      .leave()
-      .catch(err => console.error('\u26A0\uFE0F Failed to leave unauthorized guild:', err));
-  } else {
+  if (whitelist.isAllowed(guild.id)) {
     console.log(`\u2705 Joined allowed guild: ${guild.name} (${guild.id})`);
+  } else {
+    guildApproval
+      .requestApproval(client, guild)
+      .catch(err => console.error('\u26A0\uFE0F Guild approval flow failed:', err));
   }
 });
 
@@ -92,6 +97,7 @@ client.on('guildCreate', guild => {
 // (vc_member_ and vc_coowner_manage both start with vc_, so one prefix covers
 // every VC control.)
 const componentRoutes = [
+  { match: id => id.startsWith('wl_'), handle: guildApproval.handleWhitelistInteraction },
   { match: id => id.startsWith('alerts_roles:'), handle: handleAlertsInteraction },
   { match: id => id.startsWith('ticket_'), handle: handleTicketComponentOrModal },
   { match: id => id.startsWith('vc_'), handle: handleVcInteraction },
