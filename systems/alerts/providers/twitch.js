@@ -37,13 +37,21 @@ function invalidateToken() {
   tokenExpiresAt = 0;
 }
 
-async function twitchApiGet(path, clientId, token) {
+async function twitchApiGet(path, clientId, token, { retryOn429 = true } = {}) {
   const res = await fetchWithTimeout(`https://api.twitch.tv/helix/${path}`, {
     headers: {
       'Client-ID': clientId,
       Authorization: `Bearer ${token}`,
     },
   });
+  // Helix rate limit: wait until the bucket resets (header is epoch seconds),
+  // then retry ONCE. Waits are capped so a bad header can't stall a cycle.
+  if (res.status === 429 && retryOn429) {
+    const resetSec = Number(res.headers?.get?.('ratelimit-reset')) || 0;
+    const waitMs = Math.min(Math.max(resetSec * 1000 - Date.now(), 250), 5000);
+    await new Promise(r => setTimeout(r, waitMs));
+    return twitchApiGet(path, clientId, token, { retryOn429: false });
+  }
   if (!res.ok) {
     const err = new Error(`Twitch API failed: ${res.status}`);
     err.status = res.status;

@@ -41,6 +41,9 @@ module.exports = {
   // would otherwise re-alert; this collapses it to one alert per session.
   TWITCH_RELIVE_COOLDOWN_MS: 30 * 60 * 1000, // 30 min
 
+  // Refresh stored Twitch profile avatars this often (daily).
+  TWITCH_AVATAR_REFRESH_MS: 24 * 60 * 60 * 1000,
+
   // Embed accent colors per alert type
   COLORS: {
     youtube: { live: 0xff0000, shorts: 0xff2d55, vod: 0x3ba3ff },

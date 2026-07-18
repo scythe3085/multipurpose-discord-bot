@@ -118,7 +118,12 @@ test('getUsersByIds batches and maps id -> user info', async () => {
     return fakeResponse({
       json: {
         data: [
-          { id: '1', login: 'a', display_name: 'A', profile_image_url: 'https://cdn.example/a.png' },
+          {
+            id: '1',
+            login: 'a',
+            display_name: 'A',
+            profile_image_url: 'https://cdn.example/a.png',
+          },
         ],
       },
     });
@@ -128,6 +133,40 @@ test('getUsersByIds batches and maps id -> user info', async () => {
     assert.strictEqual(userCalls, 1, 'deduped into one batched call');
     assert.strictEqual(map.get('1').avatarUrl, 'https://cdn.example/a.png');
     assert.strictEqual(map.has('2'), false);
+  } finally {
+    restore();
+  }
+});
+
+test('twitchApiGet retries once on 429 honoring ratelimit-reset', async () => {
+  let streamCalls = 0;
+  const restore = stubFetch(async url => {
+    const u = String(url);
+    if (u.includes('oauth2/token')) {
+      return fakeResponse({ json: { access_token: 'tok', expires_in: 3600 } });
+    }
+    streamCalls++;
+    if (streamCalls === 1) {
+      return {
+        status: 429,
+        ok: false,
+        headers: {
+          get: n =>
+            String(n).toLowerCase() === 'ratelimit-reset'
+              ? String(Math.ceil(Date.now() / 1000))
+              : null,
+        },
+        async json() {
+          return {};
+        },
+      };
+    }
+    return fakeResponse({ json: { data: [{ id: 's1', user_id: '1', title: 'A' }] } });
+  });
+  try {
+    const map = await tw.getLiveStreams(['1'], 'cid', 'secret', 100);
+    assert.strictEqual(streamCalls, 2, '429 then retried');
+    assert.strictEqual(map.get('1').id, 's1');
   } finally {
     restore();
   }

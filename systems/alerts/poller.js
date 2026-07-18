@@ -4,12 +4,11 @@
 // logic (that's alerts.js). The Discord client is injected via setClient() at
 // init so this module has no import-time dependency on a live client.
 
-const { EmbedBuilder } = require('discord.js');
-
 const cfg = require('../../config/alerts.config.js');
 const q = require('./queries.js');
 const tw = require('./providers/twitch.js');
 const { processYoutubeChannel } = require('./youtubePipeline.js');
+const { buildTwitchEmbed } = require('./embeds.js');
 const {
   safeJsonParse,
   uniq,
@@ -23,6 +22,7 @@ let clientRef = null;
 let youtubeTimer = null;
 let twitchTimer = null;
 let pruneTimer = null;
+let avatarTimer = null;
 
 function setClient(client) {
   clientRef = client;
@@ -163,38 +163,12 @@ async function pollTwitch() {
           type: displayType('live'),
         });
 
-        const embed = new EmbedBuilder()
-          .setTitle(
-            stream.title ? String(stream.title).slice(0, 256) : '\uD83D\uDD34 Live on Twitch',
-          )
-          .setURL(url)
-          .setColor(cfg.COLORS.twitch?.live ?? 0x9146ff)
-          .setTimestamp();
-
-        // Only set an image when a real thumbnail exists — Helix occasionally
-        // omits thumbnail_url right at go-live, and "?cb=123" is an invalid URL
-        // that would throw inside setImage and silently drop the alert.
-        const thumbBase = String(stream.thumbnail_url || '');
-        if (thumbBase) {
-          const thumb =
-            thumbBase.replace('{width}', '1280').replace('{height}', '720') + `?cb=${Date.now()}`;
-          embed.setImage(thumb);
-        }
-
-        if (stream.game_name) {
-          embed.addFields({
-            name: 'Category',
-            value: String(stream.game_name).slice(0, 1024),
-            inline: true,
-          });
-        }
-        if (typeof stream.viewer_count === 'number') {
-          embed.addFields({
-            name: 'Viewers',
-            value: stream.viewer_count.toLocaleString('en-US'),
-            inline: true,
-          });
-        }
+        const embed = buildTwitchEmbed({
+          login: loginSlug,
+          displayName: sub.sourceLabel,
+          avatarUrl: sub.avatarUrl,
+          stream,
+        });
 
         // Claim before posting to avoid a double-alert race.
         if (!q.markSeen(sub.id, streamId)) continue;
@@ -213,17 +187,43 @@ async function pollTwitch() {
   if (posted) console.log(`[alerts] twitch poll: ${subs.length} subs, ${posted} posted`);
 }
 
+// Refresh stored Twitch avatars daily (one batched users call per 100 ids) so
+// embed author icons don't go stale when streamers change their pfp.
+async function refreshTwitchAvatars() {
+  const clientId = process.env.TWITCH_CLIENT_ID || '';
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET || '';
+  if (!clientId || !clientSecret) return;
+
+  const ids = q.getDistinctSourceIds('twitch');
+  if (!ids.length) return;
+
+  try {
+    const users = await tw.getUsersByIds(ids, clientId, clientSecret);
+    for (const [id, u] of users) {
+      q.setAvatarForSource('twitch', id, u.avatarUrl || null);
+    }
+  } catch (err) {
+    console.error('[alerts] Twitch avatar refresh failed:', err.message);
+  }
+}
+
 function startPollers() {
   if (youtubeTimer) clearInterval(youtubeTimer);
   if (twitchTimer) clearInterval(twitchTimer);
   if (pruneTimer) clearInterval(pruneTimer);
+  if (avatarTimer) clearInterval(avatarTimer);
 
   youtubeTimer = setInterval(() => pollYoutube().catch(() => {}), cfg.YOUTUBE_POLL_MS);
   twitchTimer = setInterval(() => pollTwitch().catch(() => {}), cfg.TWITCH_POLL_MS);
   pruneTimer = setInterval(q.pruneSeenItems, cfg.SEEN_PRUNE_INTERVAL_MS);
+  avatarTimer = setInterval(
+    () => refreshTwitchAvatars().catch(() => {}),
+    cfg.TWITCH_AVATAR_REFRESH_MS,
+  );
 
   pollYoutube().catch(() => {});
   pollTwitch().catch(() => {});
+  refreshTwitchAvatars().catch(() => {});
   q.pruneSeenItems();
 }
 
