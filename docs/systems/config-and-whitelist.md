@@ -3,9 +3,9 @@
 Two related subsystems control who the bot serves and how it behaves on each server:
 
 1. **`/config`** — per-guild settings (channels and roles) that every other system reads. Each guild is fully isolated; nothing is shared across servers.
-2. **The guild whitelist** — an owner-only allow-list that decides which Discord servers the bot is permitted to join at all. The bot auto-leaves any server not on the list.
+2. **The guild whitelist** — an owner-only allow-list that decides which Discord servers the bot is permitted to join at all. A server not on the list gets a DM approval flow (or, without a usable owner DM, an immediate leave) rather than staying — see [First server](#first-server-no-chicken-and-egg) below.
 
-All per-server setup happens **in Discord** via `/config`, not through environment variables. The only operator-level secret involved here is `OWNER_ID` in `.env` (see [Setup](../setup.md)).
+All per-server setup happens **in Discord** via `/config`, not through environment variables. The operator-level secrets involved here are `OWNER_ID` and (optionally) `ALLOWED_GUILD_IDS` in `.env` (see [Setup](../setup.md)).
 
 ---
 
@@ -114,16 +114,40 @@ The whitelist decides which Discord servers the bot will operate in. It is enfor
 
 IDs are de-duped and normalized to strings on load; a missing file (`ENOENT`) or a non-array file is treated as an empty list. Like the config store, writes are atomic.
 
-The runtime file is gitignored. A template ships as `config/allowed-guilds.example.json` (contents: `[]`). You can either pre-seed it with your guild IDs before first run, or add them at runtime with `/add guild`.
+The runtime file is gitignored. A template ships as `config/allowed-guilds.example.json` (contents: `[]`). You can either pre-seed it (or `.env`, see below) before first run, or add guilds at runtime with `/add guild` once the bot is already in at least one allowed server.
 
-### Auto-leave on join (`guildCreate` in `index.js`)
+### First server (no chicken-and-egg)
+
+Two ways to allow your first server before `/add` is usable:
+
+1. **`.env` seed** — set `ALLOWED_GUILD_IDS=<your guild id>` before starting the
+   bot; ids are merged into the allow-list at boot.
+2. **DM approval** — just invite the bot. Joining a non-allowed server now DMs
+   the owner (`OWNER_ID`) an approval card with **Approve** / **Leave** buttons
+   instead of instantly leaving. No decision within 24 hours = the bot leaves.
+   A startup sweep re-checks every current server, so restarts or missed DMs
+   can't strand anything. If the DM cannot be delivered at all (closed DMs),
+   the bot falls back to leaving immediately and logs a hint.
+
+### Auto-leave / DM approval on join (`guildCreate` in `index.js`, `systems/guildApproval.js`)
 
 When the bot is added to any server, the `guildCreate` handler checks `whitelist.isAllowed(guild.id)`:
 
-- **Not allowed** → it logs `Joined unauthorized guild … — leaving.` and immediately calls `guild.leave()`.
 - **Allowed** → it logs `Joined allowed guild …` and stays.
+- **Not allowed** → it calls `guildApproval.requestApproval(client, guild)` (see below) instead of leaving immediately.
 
-So a guild must be on the allow-list **before** the bot is invited, otherwise it leaves on the way in. Add the ID with `/add guild` (from a server where the owner is already present) or pre-seed `config/allowed-guilds.json`, then invite the bot.
+#### `requestApproval` (DM approval flow)
+
+- If `OWNER_ID` is unset, there is nobody to DM: the bot logs a warning (with a tip to set `ALLOWED_GUILD_IDS`) and leaves immediately — same as the old behaviour.
+- Otherwise it DMs the owner an embed (`🛡️ New server wants the bot`, with the guild's name/ID/member count) and two buttons: `wl_approve:<guildId>` and `wl_deny:<guildId>` (customId prefix `wl_`, routed by `handleWhitelistInteraction`).
+  - **Approve** adds the guild to the allow-list and clears the pending timer.
+  - **Leave** (only if the guild isn't already allowed — guards a stale duplicate card) leaves the guild and clears the pending timer.
+  - **No response within 24 hours** (`PENDING_TIMEOUT_MS`) → the bot leaves automatically if the guild still isn't allowed.
+- If the DM can't be delivered at all (e.g. the owner has DMs closed to the bot), the bot falls back to leaving immediately, same as the no-`OWNER_ID` case.
+- Pending state is **in-memory only** (a `Map<guildId, Timeout>`) — it is not persisted. A `GuildDelete` event clears any pending timer for that guild, so if the bot is re-invited later it gets a fresh approval card and a full 24-hour window rather than inheriting stale state.
+- On `ClientReady`, `guildApproval.sweepUnapproved(client)` re-checks every guild the bot is currently in and re-requests approval for anything not allowed — this catches guilds that joined (or whose DM was missed) while the bot was offline, since pending state doesn't survive a restart.
+
+So with both mechanisms, a guild never needs to be pre-approved before inviting the bot — either seed `ALLOWED_GUILD_IDS` ahead of time, or just invite it and approve the DM.
 
 ### `/add guild` — allow a guild ID
 
@@ -167,15 +191,17 @@ Because the Discord-side gate is admin-only and the authoritative gate is `isOwn
 
 ## Quick reference
 
-| Concern                   | Where it lives                                                                |
-| ------------------------- | ----------------------------------------------------------------------------- |
-| Per-guild config command  | `commands/config.js`                                                          |
-| Config store / accessors  | `systems/guildConfig.js` (on `systems/store.js`)                              |
-| Config runtime file       | `config/guild-config.json` (template: `config/guild-config.example.json`)     |
-| Whitelist logic           | `systems/whitelist.js`                                                        |
-| Whitelist runtime file    | `config/allowed-guilds.json` (template: `config/allowed-guilds.example.json`) |
-| Auto-leave handler        | `guildCreate` in `index.js`                                                   |
-| Owner commands            | `commands/add.js`, `commands/removeguild.js`                                  |
-| Owner / permission checks | `systems/permissions.js` (`isOwner`, `isAdmin`, `isManager`)                  |
+| Concern                   | Where it lives                                                                                                         |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Per-guild config command  | `commands/config.js`                                                                                                   |
+| Config store / accessors  | `systems/guildConfig.js` (on `systems/store.js`)                                                                       |
+| Config runtime file       | `config/guild-config.json` (template: `config/guild-config.example.json`)                                              |
+| Whitelist logic           | `systems/whitelist.js`                                                                                                 |
+| Whitelist runtime file    | `config/allowed-guilds.json` (template: `config/allowed-guilds.example.json`)                                          |
+| `.env` allow-list seed    | `ALLOWED_GUILD_IDS` → `whitelist.seedFromEnv()` at boot                                                                |
+| DM approval flow          | `systems/guildApproval.js` (`requestApproval`, `sweepUnapproved`, `handleWhitelistInteraction`, customId prefix `wl_`) |
+| Join / leave handlers     | `guildCreate` and `GuildDelete` in `index.js`                                                                          |
+| Owner commands            | `commands/add.js`, `commands/removeguild.js`                                                                           |
+| Owner / permission checks | `systems/permissions.js` (`isOwner`, `isAdmin`, `isManager`)                                                           |
 
 Related docs: [Setup](../setup.md) · [Tickets](./tickets.md) · [Verification](./verification.md) · [Temporary Voice Channels](./temp-voice.md) · [YouTube/Twitch Alerts](./alerts.md)

@@ -63,12 +63,13 @@ Commands are registered with Discord by a separate script: `npm run deploy-comma
 1. **Slash commands** — `interaction.isChatInputCommand()` looks up the command in `client.commands` and calls its `execute`.
 2. **Components & modals** — buttons, select menus, and modal submits are dispatched by their **`customId` prefix** against an ordered dispatch table. The first matching route wins:
 
-   | customId prefix | Handler                        | System       |
-   | --------------- | ------------------------------ | ------------ |
-   | `alerts_roles:` | `handleAlertsInteraction`      | Alerts       |
-   | `ticket_`       | `handleTicketComponentOrModal` | Tickets      |
-   | `vc_`           | `handleVcInteraction`          | Voice        |
-   | `verify_`       | `handleVerifyInteraction`      | Verification |
+   | customId prefix | Handler                        | System                     |
+   | --------------- | ------------------------------ | -------------------------- |
+   | `wl_`           | `handleWhitelistInteraction`   | Whitelist (guild approval) |
+   | `alerts_roles:` | `handleAlertsInteraction`      | Alerts                     |
+   | `ticket_`       | `handleTicketComponentOrModal` | Tickets                    |
+   | `vc_`           | `handleVcInteraction`          | Voice                      |
+   | `verify_`       | `handleVerifyInteraction`      | Verification               |
 
 Because each system owns a distinct prefix, the prefix alone identifies the handler — there is no need to also branch on component type. (For example, both `vc_member_` and `vc_coowner_manage` controls fall under the single `vc_` prefix.) The verify route covers both the panel button — whose `customId` defaults to `verify_button` (see `config/verify.config.js`) — and the word-challenge modal.
 
@@ -85,7 +86,7 @@ Runtime JSON state lives in `config/` (the guild whitelist, per-guild config, VC
 
 ### The guild whitelist
 
-`systems/whitelist.js` is the single source of truth for which servers the bot may serve. It is consulted by the owner-only `/add` and `/removeguild` commands and enforced on `guildCreate`: when the bot is added to a guild that is **not** allow-listed, it logs the event and immediately leaves. To onboard your own server, run `/add guild id:<your-guild>` as the owner after inviting the bot. See [Config & Whitelist](./systems/config-and-whitelist.md).
+`systems/whitelist.js` is the single source of truth for which servers the bot may serve. It is consulted by the owner-only `/add` and `/removeguild` commands and enforced on `guildCreate`. Joining a guild that is **not** allow-listed no longer means an instant leave: `systems/guildApproval.js` DMs the bot owner (`OWNER_ID`) an Approve/Leave card (customId prefix `wl_`), auto-leaving only if there's no response within 24 hours, the DM can't be delivered, or `OWNER_ID` is unset. A startup sweep re-checks every current guild so restarts or missed DMs can't strand anything. To skip the DM step entirely, seed `ALLOWED_GUILD_IDS` in `.env` before the guild is even invited. See [Config & Whitelist](./systems/config-and-whitelist.md).
 
 ### Gateway intents
 
@@ -98,6 +99,8 @@ The client requests a deliberately minimal set of intents (`index.js`):
 | `MessageContent`   | **Privileged** — see below                               |
 
 `MessageContent` is a **privileged** intent and must be enabled on the bot in the Discord Developer Portal (Bot tab → Privileged Gateway Intents). It is used **only** so that REST-fetched thread messages carry their `.content` when building **ticket transcripts**. The bot does _not_ subscribe to the live `GuildMessages` gateway intent — nothing listens for live messages, so streaming every guild message would be wasted bandwidth. The Server Members and Presence intents are not used.
+
+For the same reason, the client's message and reaction caches are disabled entirely (`MessageManager: 0`, `ReactionManager: 0` via `Options.cacheWithLimits`) — nothing in the bot consumes live message or reaction events, so caching them would only cost memory and GC time for no benefit. Ticket transcripts are built by REST-fetching thread messages on close, not from the cache.
 
 ---
 
@@ -117,7 +120,7 @@ A configured "Join to Create" channel spawns a personal voice channel that the j
 
 ### 📺 YouTube / Twitch Alerts
 
-Per guild, `/alerts` subscribes channels to YouTube uploads/Shorts/livestreams and Twitch live alerts; the poller posts rich embeds with optional role pings into a target channel. State is stored in SQLite, and tunables (poll intervals, per-guild subscription caps, embed colours, message templates) live in `config/alerts.config.js`. YouTube and Twitch each require their own API credentials and **silently degrade/disable** when those keys are absent. See [Alerts](./systems/alerts.md).
+Per guild, `/alerts` subscribes channels to YouTube uploads/Shorts/livestreams and Twitch live alerts; the poller posts rich embeds with optional role pings into a target channel. YouTube subscriptions are polled channel-deduped (one feed fetch and one classification per channel per cycle, regardless of how many subscriptions point at it) every 60 seconds, with conditional (ETag) requests to avoid re-fetching unchanged feeds; an optional WebSub push mode (`WEBSUB_CALLBACK_URL`) delivers new uploads within seconds and relaxes the poller to a 5-minute safety-net interval. State is stored in SQLite, and tunables (poll intervals, per-guild subscription caps, embed colours, message templates) live in `config/alerts.config.js`. YouTube and Twitch each require their own API credentials and **silently degrade/disable** when those keys are absent. See [Alerts](./systems/alerts.md).
 
 ### 🛡️ Configuration & Whitelist
 

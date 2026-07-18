@@ -54,7 +54,7 @@ npm run deploy-commands
 npm start
 ```
 
-The bot leaves any guild that is not on its whitelist. To allow your own server, run **`/add guild id:<your-guild-id>`** as the owner once the bot is running and invited.
+The bot only stays in guilds on its whitelist. Easiest first-run path: set `ALLOWED_GUILD_IDS=<your-guild-id>` in `.env` before starting the bot. Otherwise, just invite it — a non-whitelisted server now DMs the owner (`OWNER_ID`) an Approve/Leave card instead of instantly leaving (auto-leaves after 24h with no response). See [Config & Whitelist](./docs/systems/config-and-whitelist.md).
 
 ---
 
@@ -62,15 +62,19 @@ The bot leaves any guild that is not on its whitelist. To allow your own server,
 
 Copy `.env.example` → `.env` and fill in the values. See `.env.example` for inline notes.
 
-| Variable               | Required | Purpose                                                                                                           |
-| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `DISCORD_TOKEN`        | ✅       | Bot token                                                                                                         |
-| `CLIENT_ID`            | ✅       | Application (client) ID — used to register slash commands                                                         |
-| `OWNER_ID`             | ✅       | Your Discord user ID. Gates the owner-only `/add` and `/removeguild`. **If unset, those commands deny everyone.** |
-| `GUILD_ID`             | ➖       | Optional. Used only by `deploy-commands` to clear leftover guild-scoped commands on a test guild                  |
-| `YOUTUBE_API_KEY`      | ➖       | Enables YouTube alerts                                                                                            |
-| `TWITCH_CLIENT_ID`     | ➖       | Enables Twitch alerts                                                                                             |
-| `TWITCH_CLIENT_SECRET` | ➖       | Enables Twitch alerts                                                                                             |
+| Variable               | Required | Purpose                                                                                                                                                        |
+| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DISCORD_TOKEN`        | ✅       | Bot token                                                                                                                                                      |
+| `CLIENT_ID`            | ✅       | Application (client) ID — used to register slash commands                                                                                                      |
+| `OWNER_ID`             | ✅       | Your Discord user ID. Gates the owner-only `/add` and `/removeguild`, and receives whitelist DM-approval requests. **If unset, those commands deny everyone.** |
+| `ALLOWED_GUILD_IDS`    | ➖       | Optional. Comma-separated guild IDs pre-seeded into the allow-list at boot                                                                                     |
+| `GUILD_ID`             | ➖       | Optional. Used only by `deploy-commands` to clear leftover guild-scoped commands on a test guild                                                               |
+| `YOUTUBE_API_KEY`      | ➖       | Enables YouTube alerts                                                                                                                                         |
+| `TWITCH_CLIENT_ID`     | ➖       | Enables Twitch alerts                                                                                                                                          |
+| `TWITCH_CLIENT_SECRET` | ➖       | Enables Twitch alerts                                                                                                                                          |
+| `WEBSUB_CALLBACK_URL`  | ➖       | Optional. Enables near-instant YouTube push notifications instead of polling-only                                                                              |
+| `WEBSUB_PORT`          | ➖       | Optional. Port for the WebSub HTTP endpoint (default `8080`)                                                                                                   |
+| `WEBSUB_SECRET`        | ➖       | Optional. HMAC secret to verify WebSub notifications                                                                                                           |
 
 Per-guild settings (ticket/verify/VC channels and roles) are **not** in `.env` — they are configured live with `/config` and stored per guild.
 
@@ -106,6 +110,7 @@ systems/              # The five systems + shared primitives
   ├─ alerts/          #   YouTube/Twitch alerts (providers, db, poller, config)
   ├─ guildConfig.js   #   per-guild settings (JSON-backed)
   ├─ whitelist.js     #   the guild allow-list (single source of truth)
+  ├─ guildApproval.js #   DM approval flow for non-whitelisted guilds
   ├─ store.js         #   shared atomic JSON key/value store factory
   ├─ permissions.js   #   isOwner / isAdmin / isManager
   ├─ reply.js         #   ephemeral reply helpers

@@ -102,9 +102,7 @@ function seedFromEnv(env = process.env) {
   // The most likely misconfiguration is a typo'd/misformatted id — warn loudly
   // instead of silently seeding nothing.
   if (raw && !seeds.length) {
-    console.warn(
-      '⚠️ ALLOWED_GUILD_IDS is set but contains no valid guild ids — check for typos.',
-    );
+    console.warn('⚠️ ALLOWED_GUILD_IDS is set but contains no valid guild ids — check for typos.');
   }
 
   // add() persists the file once per new id. Fine here: this runs once at boot

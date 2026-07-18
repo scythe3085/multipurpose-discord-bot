@@ -66,7 +66,10 @@ async function processYoutubeChannel(ctx) {
   for (const item of items) {
     // Quota is global to the API key — once any channel trips it, stop
     // classifying everywhere rather than burning more calls that will fail.
-    if (state.quotaHit) { allResolved = false; break; }
+    if (state.quotaHit) {
+      allResolved = false;
+      break;
+    }
     try {
       const publishedMs = item.published ? Date.parse(item.published) : null;
 
@@ -102,7 +105,10 @@ async function processYoutubeChannel(ctx) {
 
       // Scheduled premiere / not-yet-started stream: skip WITHOUT marking
       // seen so it fires when it actually flips to live.
-      if (classified.type === 'upcoming') { allResolved = false; continue; }
+      if (classified.type === 'upcoming') {
+        allResolved = false;
+        continue;
+      }
 
       const type = classified.type || 'vod';
       const title = classified.title || item.title || 'New upload';

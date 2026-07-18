@@ -34,7 +34,7 @@ The bot runs as a **single Node.js process** with no external services beyond Di
 
    Then open the URL and add the bot to your server.
 
-> The bot enforces a **guild whitelist**: it auto-leaves any server not on the allow-list. You will whitelist your server in [Step 7](#7-whitelist-and-configure-your-server).
+> The bot enforces a **guild whitelist**. If your server isn't on the allow-list yet, the bot DMs the owner (`OWNER_ID`) an Approve/Leave card instead of leaving immediately — or you can pre-seed the allow-list via `ALLOWED_GUILD_IDS` in `.env` before inviting it. See [Step 7](#7-whitelist-and-configure-your-server).
 
 ---
 
@@ -60,15 +60,19 @@ cp .env.example .env
 
 Every variable in `.env.example`, in order:
 
-| Variable               | Required | What it is / where to get it                                                                                                                                                                                                               |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DISCORD_TOKEN`        | ✅       | Bot token. Developer Portal → your app → **Bot** tab → **Reset Token**. Keep it secret.                                                                                                                                                    |
-| `CLIENT_ID`            | ✅       | Application (client) ID. Developer Portal → **General Information** tab → **Application ID**. Used to register slash commands.                                                                                                             |
-| `OWNER_ID`             | ✅       | **Your own Discord user ID.** Enable Developer Mode in Discord, then right-click yourself → **Copy User ID**. Gates the owner-only `/add` and `/removeguild` commands. **If this is unset, those commands deny everyone** — including you. |
-| `GUILD_ID`             | ➖       | Optional. Used **only** by `npm run deploy-commands` to clear leftover guild-scoped commands on your main/test guild. Safe to leave blank for a global-only deploy.                                                                        |
-| `YOUTUBE_API_KEY`      | ➖       | Optional. YouTube Data API v3 key from <https://console.cloud.google.com/> (enable "YouTube Data API v3"). Leave blank to **disable YouTube alerts**.                                                                                      |
-| `TWITCH_CLIENT_ID`     | ➖       | Optional. Twitch app credential from <https://dev.twitch.tv/console/apps>. Leave blank to **disable Twitch alerts**.                                                                                                                       |
-| `TWITCH_CLIENT_SECRET` | ➖       | Optional. The matching Twitch app secret. Leave blank to **disable Twitch alerts**.                                                                                                                                                        |
+| Variable               | Required | What it is / where to get it                                                                                                                                                                                                                                                                                                                           |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DISCORD_TOKEN`        | ✅       | Bot token. Developer Portal → your app → **Bot** tab → **Reset Token**. Keep it secret.                                                                                                                                                                                                                                                                |
+| `CLIENT_ID`            | ✅       | Application (client) ID. Developer Portal → **General Information** tab → **Application ID**. Used to register slash commands.                                                                                                                                                                                                                         |
+| `OWNER_ID`             | ✅       | **Your own Discord user ID.** Enable Developer Mode in Discord, then right-click yourself → **Copy User ID**. Gates the owner-only `/add` and `/removeguild` commands, and is who the whitelist DM-approval flow messages. **If this is unset, those commands deny everyone** — including you — and unapproved guilds get no DM (the bot just leaves). |
+| `ALLOWED_GUILD_IDS`    | ➖       | Optional. Comma-separated guild IDs merged into the allow-list at boot — pre-seeds your first server so you don't have to rely on the DM approval flow or run `/add` from inside an already-allowed guild.                                                                                                                                             |
+| `GUILD_ID`             | ➖       | Optional. Used **only** by `npm run deploy-commands` to clear leftover guild-scoped commands on your main/test guild. Safe to leave blank for a global-only deploy.                                                                                                                                                                                    |
+| `YOUTUBE_API_KEY`      | ➖       | Optional. YouTube Data API v3 key from <https://console.cloud.google.com/> (enable "YouTube Data API v3"). Leave blank to **disable YouTube alerts**.                                                                                                                                                                                                  |
+| `TWITCH_CLIENT_ID`     | ➖       | Optional. Twitch app credential from <https://dev.twitch.tv/console/apps>. Leave blank to **disable Twitch alerts**.                                                                                                                                                                                                                                   |
+| `TWITCH_CLIENT_SECRET` | ➖       | Optional. The matching Twitch app secret. Leave blank to **disable Twitch alerts**.                                                                                                                                                                                                                                                                    |
+| `WEBSUB_CALLBACK_URL`  | ➖       | Optional. Public HTTPS URL that YouTube's PubSubHubbub hub can reach (reverse-proxied to `WEBSUB_PORT`), enabling near-instant push notifications for new uploads instead of waiting for the next poll. Leave blank to stay in polling-only mode.                                                                                                      |
+| `WEBSUB_PORT`          | ➖       | Optional. Local port the WebSub HTTP server listens on. Defaults to `8080`. Only relevant when `WEBSUB_CALLBACK_URL` is set.                                                                                                                                                                                                                           |
+| `WEBSUB_SECRET`        | ➖       | Optional. HMAC secret used to verify incoming WebSub notifications. Strongly recommended whenever `WEBSUB_CALLBACK_URL` is set, since that endpoint is reachable from the internet.                                                                                                                                                                    |
 
 > Twitch alerts need **both** `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET`. If either is missing, Twitch alerts stay off.
 
@@ -108,17 +112,21 @@ For a long-running deployment (VPS, auto-restart, log management), run it under 
 
 ## 7. Whitelist and configure your server
 
-The bot leaves any guild that is not on its whitelist, so this step happens **in Discord** after the bot is online and invited.
+The bot only stays in guilds on its whitelist. There are three ways to get your first server onto it:
 
-### 7a. Whitelist your server (owner only)
+### 7a. Whitelist your server
 
-As the user whose ID is in `OWNER_ID`, run:
+**Option 1 — pre-seed via `.env` (no chicken-and-egg):** before starting the bot, set `ALLOWED_GUILD_IDS=<your-guild-id>` in `.env` (Developer Mode → right-click the server → **Copy Server ID**). Ids are merged into the allow-list at boot, so your invite is accepted immediately.
+
+**Option 2 — DM approval (just invite the bot):** if your server isn't already allow-listed when you invite the bot, it DMs the user in `OWNER_ID` an approval card (server name/ID/member count, with **Approve** / **Leave** buttons) instead of leaving right away. Click **Approve** to add it to the allow-list. If you don't respond within 24 hours, the bot leaves automatically. A startup sweep also re-checks every current guild, so a restart or a missed DM can't strand the bot in limbo. If the owner's DMs are closed (or `OWNER_ID` is unset), the bot falls back to leaving immediately.
+
+**Option 3 — `/add` from an already-allowed guild:** once the bot is in at least one allowed server, the owner can run, in Discord:
 
 ```text
 /add guild id:<your-guild-id>
 ```
 
-`<your-guild-id>` is your server's ID (Developer Mode → right-click the server → **Copy Server ID**). The bot validates it as a Discord snowflake and adds it to the allow-list; new invites to that guild are then accepted.
+`<your-guild-id>` is validated as a Discord snowflake and added to the allow-list; new invites to that guild are then accepted.
 
 ### 7b. Per-server setup with `/config`
 

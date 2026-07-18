@@ -90,23 +90,27 @@ The input is stripped of a leading `https://twitch.tv/` (and any trailing path) 
 
 The poller ([`poller.js`](../../systems/alerts/poller.js)) runs on `setInterval` timers started at boot. Each poll type has a re-entrancy guard so a slow cycle never overlaps itself. A daily sweep prunes old dedup rows.
 
-| Timer              | Interval (config key)    | Default |
-| ------------------ | ------------------------ | ------- |
-| YouTube            | `YOUTUBE_POLL_MS`        | 2 min   |
-| Twitch             | `TWITCH_POLL_MS`         | 30 s    |
-| Prune `seen_items` | `SEEN_PRUNE_INTERVAL_MS` | 24 h    |
+| Timer              | Interval (config key)    | Default                                                                          |
+| ------------------ | ------------------------ | -------------------------------------------------------------------------------- |
+| YouTube            | `YOUTUBE_POLL_MS`        | 60 s (5 min via `YOUTUBE_POLL_MS_WEBSUB` when WebSub push is active — see below) |
+| Twitch             | `TWITCH_POLL_MS`         | 30 s                                                                             |
+| Prune `seen_items` | `SEEN_PRUNE_INTERVAL_MS` | 24 h                                                                             |
 
 ### YouTube cycle
 
-1. Fetch every enabled YouTube subscription. They are polled with bounded **concurrency** (`YOUTUBE_POLL_CONCURRENCY`, default 4) — network waits overlap, but items _within_ one sub stay serial to preserve ordering.
-2. For each sub, fetch the channel **RSS feed** (`https://www.youtube.com/feeds/videos.xml?channel_id=...`, with retries and browser-like headers). The feed is capped at `MAX_FEED_ITEMS_TO_CHECK` (15 — the full window YouTube returns) and **reversed to oldest-first** so a burst of uploads can't starve older unseen items below a cutoff.
+The YouTube pipeline is shared code ([`youtubePipeline.js`](../../systems/alerts/youtubePipeline.js)) used by both the RSS poller and the WebSub push handler, so the same claim/classify/post logic runs regardless of what triggered it.
+
+1. Subscriptions are grouped **by YouTube channel** first — N subscriptions pointed at the same channel are polled together, so a channel's feed is fetched **once per cycle** and each new video is **classified once per cycle**, not once per subscription. Channels are then processed with bounded **concurrency** (`YOUTUBE_POLL_CONCURRENCY`, default 4) — network waits overlap, but items _within_ one channel stay serial to preserve ordering.
+2. For each channel, fetch the **RSS feed** (`https://www.youtube.com/feeds/videos.xml?channel_id=...`, with retries and browser-like headers) as a **conditional request** — an in-memory per-channel cache stores the `ETag`/`Last-Modified` from the previous fetch and sends them as `If-None-Match`/`If-Modified-Since`. A `304 Not Modified` short-circuits the whole channel for that cycle (no parsing, no classification). The cached validators are only committed once every item in the feed reaches a terminal state (seen/posted/filtered) for every subscription; anything left unresolved (a classify error, an `upcoming` premiere, a quota break) forces an unconditional fetch again next cycle. The feed is capped at `MAX_FEED_ITEMS_TO_CHECK` (15 — the full window YouTube returns) and **reversed to oldest-first** so a burst of uploads can't starve older unseen items below a cutoff.
 3. For each feed item, in order:
-   - Skip if already in `seen_items`.
-   - If the video was published **before the subscription was created**, mark it seen and skip (no back-fill of old uploads).
-   - **Classify** the video (see below) into `live` / `upcoming` / `shorts` / `vod`.
+   - Work out which subscriptions (of the ones sharing this channel) still need this item **before** classifying — a video already seen by every subscription, or published before all of them were created, costs zero Data API calls.
+   - If the video was published **before a given subscription was created**, mark it seen for that subscription and skip (no back-fill of old uploads).
+   - **Classify** the video (see below) into `live` / `upcoming` / `shorts` / `vod` — once per video per cycle, cached and reused across every subscription on that channel.
    - `upcoming` (a scheduled premiere/stream that hasn't started) is skipped **without** marking seen, so it fires when it actually goes live.
-   - If the classified type isn't in the sub's `types`, mark it seen and skip.
+   - If the classified type isn't in a subscription's `types`, mark it seen for that subscription and skip.
    - Otherwise **claim** it (`markSeen` — an atomic `INSERT OR IGNORE`) _before_ sending, then post the embed.
+
+Because the feed fetch and classification are now shared per channel instead of per subscription, adding more subscriptions to the same channel does not multiply RSS requests or Data API quota usage — quota use stays flat (or drops, thanks to conditional requests) as subscription count grows.
 
 #### YouTube classification (`classifyVideo`)
 
@@ -130,6 +134,30 @@ Without a key, classification can only run the probe: 200 ⇒ `shorts`, otherwis
    - Skip if the stream id is already seen.
    - **Re-live cooldown:** if this broadcaster already alerted within `TWITCH_RELIVE_COOLDOWN_MS` (30 min), mark the new stream id seen and skip the alert. A brief drop/reconnect mints a fresh stream id; this collapses it into one alert per session.
    - Claim the stream id, post the embed, then stamp `lastLiveAlertAt` (which arms the cooldown).
+
+Twitch also refreshes stored streamer avatars once a day (`TWITCH_AVATAR_REFRESH_MS`, default 24h) with a single batched Helix `users` call per 100 ids, so embed author icons don't go stale when a streamer changes their profile picture. Helix `429` responses are retried honoring the `Ratelimit-Reset` header instead of failing the batch outright.
+
+---
+
+## WebSub push (optional)
+
+Set `WEBSUB_CALLBACK_URL` (public HTTPS URL, reverse-proxied to `WEBSUB_PORT`,
+default 8080) and optionally `WEBSUB_SECRET` (HMAC verification — strongly
+recommended for an internet-exposed endpoint) in `.env`, and the bot
+subscribes every YouTube channel to YouTube's PubSubHubbub hub. Uploads then
+arrive within seconds of publish instead of at the next poll. Leases renew
+automatically (hourly check); the RSS poller stays on as a safety net at a
+relaxed 5-minute interval (`YOUTUBE_POLL_MS_WEBSUB`). Removing the last
+subscription for a channel unsubscribes it. Leave `WEBSUB_CALLBACK_URL` blank
+and nothing changes — polling-only mode.
+
+Implementation details ([`websub.js`](../../systems/alerts/websub.js)):
+
+- A `node:http` server handles the hub's verification handshake (`GET` with `hub.challenge`, echoed back; the lease expiry is recorded from `hub.lease_seconds`) and content notifications (`POST` with an Atom body).
+- Notification bodies are verified with HMAC-SHA1 against `WEBSUB_SECRET` (header `X-Hub-Signature: sha1=...`) when a secret is configured; an unverified signature is dropped and logged. Without a secret, verification is skipped (not recommended for a publicly reachable endpoint).
+- Each notification's channel ids are extracted from the Atom feed, the per-channel feed cache is busted (forcing a fresh, non-304 fetch), and the shared YouTube pipeline (`processYoutubeChannel`) runs immediately for that channel — so a push and a poll can never double-post, since both funnel through the same `seen_items` claim.
+- On `/alerts add provider:youtube`, the channel is subscribed to the hub (`hub.mode=subscribe`); when the last subscription for a channel is removed, it's unsubscribed. A background sync (`syncSubscriptions`, hourly via `WEBSUB.RENEW_CHECK_MS`) re-subscribes anything within `WEBSUB.RENEW_MARGIN_MS` (24h) of its lease expiring — the hub's max lease is 828000s (~9.6 days).
+- Disabled entirely (server never starts) unless `WEBSUB_CALLBACK_URL` is set.
 
 ---
 
@@ -202,30 +230,40 @@ Validation: the template must be non-empty, **under ~1900 chars** (leaving room 
 
 ## Rich embeds
 
-Every alert includes both the template text **and** an embed.
+Every alert includes both the template text **and** an embed (built by [`embeds.js`](../../systems/alerts/embeds.js)).
 
-**YouTube embed:** author = channel title, title = video title (linked to the watch URL), accent color by type (`COLORS.youtube`: live `0xff0000`, shorts `0xff2d55`, vod `0x3ba3ff`), image = `i.ytimg.com/vi/<id>/hqdefault.jpg`, timestamp = publish time.
+**YouTube embed:** author line is the channel's title **and avatar**, linked to the channel's YouTube page (`avatarUrl` comes from the stored subscription — see _Channel avatars_ below); title = video title (linked to the watch URL); accent color by type (`COLORS.youtube`: live `0xff0000`, shorts `0xff2d55`, vod `0x3ba3ff`); image = `i.ytimg.com/vi/<id>/hqdefault.jpg`; footer distinguishes "Live now" / "Shorts" / plain YouTube; timestamp = publish time. Regular videos (`vod`) get a **Duration** field (`h:mm:ss` / `m:ss`) when the Data API reports a length.
 
-**Twitch embed:** title = stream title (linked), color `0x9146ff`, plus inline fields when Helix provides them — **Category** (`game_name`) and **Viewers** (`viewer_count`, locale-formatted). The stream thumbnail is set only when a real `thumbnail_url` exists (Helix occasionally omits it at go-live, and an invalid URL would silently drop the alert).
+**Twitch embed:** author line is the streamer's display name ("_name_ is LIVE") **and profile avatar**, linked to their Twitch page; title = stream title (linked); color `0x9146ff`; a **box-art thumbnail** (`static-cdn.jtvnw.net/ttv-boxart/<game_id>-144x192.jpg`) when Helix reports a `game_id`; the live preview image (cache-busted so it's never a stale offline frame) when Helix provides `thumbnail_url` (it occasionally omits this right at go-live, and an invalid URL would silently drop the alert); inline fields **Category** (`game_name`), **Viewers** (`viewer_count`, locale-formatted), and **Started** (relative timestamp from `started_at`).
+
+### Channel / streamer avatars
+
+Subscriptions store an `avatarUrl` captured once, when the channel/streamer is resolved at `/alerts add` time (YouTube: via the Data API, best-effort; Twitch: via the Helix `users` lookup). Twitch avatars are additionally refreshed daily for every distinct broadcaster with an active subscription (`TWITCH_AVATAR_REFRESH_MS`), so a streamer's rebrand doesn't leave a stale icon in every future alert. YouTube has no equivalent refresh job — a channel's stored avatar only updates the next time it's newly subscribed.
 
 ---
 
 ## Limits & tuning (`config/alerts.config.js`)
 
-| Key                         | Default | Effect                                                                         |
-| --------------------------- | ------- | ------------------------------------------------------------------------------ |
-| `YOUTUBE_POLL_MS`           | 2 min   | YouTube poll interval.                                                         |
-| `TWITCH_POLL_MS`            | 30 s    | Twitch poll interval (cheap: one batched call).                                |
-| `YOUTUBE_POLL_CONCURRENCY`  | 4       | YouTube subs polled in parallel per cycle.                                     |
-| `MAX_FEED_ITEMS_TO_CHECK`   | 15      | RSS items inspected per sub. Lowering risks permanently missing burst uploads. |
-| `MAX_SUBS_PER_GUILD`        | 25      | Per-server subscription cap (bounds Data API / fetch load).                    |
-| `MAX_ROLE_MENTIONS`         | 10      | Max mention roles per subscription.                                            |
-| `SHORTS_MAX_DURATION`       | 180     | Max Short length (s) before classification skips the probe.                    |
-| `TWITCH_BATCH_SIZE`         | 100     | Helix `streams` ids per request.                                               |
-| `TWITCH_RELIVE_COOLDOWN_MS` | 30 min  | Suppresses a repeat go-live alert from a reconnect.                            |
-| `SEEN_RETENTION_DAYS`       | 90      | `seen_items` retention before the daily prune.                                 |
-| `SEEN_PRUNE_INTERVAL_MS`    | 24 h    | Prune sweep interval.                                                          |
-| `COLORS`, `TEMPLATES`       | —       | Embed accent colors and default templates.                                     |
+| Key                         | Default                   | Effect                                                                                                                   |
+| --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `YOUTUBE_POLL_MS`           | 60 s                      | YouTube poll interval (channel-deduped fetch + conditional GETs keep this cheap).                                        |
+| `YOUTUBE_POLL_MS_WEBSUB`    | 5 min                     | YouTube poll interval used instead of `YOUTUBE_POLL_MS` while WebSub push is active — polling is then just a safety net. |
+| `TWITCH_POLL_MS`            | 30 s                      | Twitch poll interval (cheap: one batched call).                                                                          |
+| `YOUTUBE_POLL_CONCURRENCY`  | 4                         | YouTube **channels** (not subscriptions) polled in parallel per cycle.                                                   |
+| `MAX_FEED_ITEMS_TO_CHECK`   | 15                        | RSS items inspected per channel. Lowering risks permanently missing burst uploads.                                       |
+| `MAX_SUBS_PER_GUILD`        | 25                        | Per-server subscription cap (bounds Data API / fetch load).                                                              |
+| `MAX_ROLE_MENTIONS`         | 10                        | Max mention roles per subscription.                                                                                      |
+| `SHORTS_MAX_DURATION`       | 180                       | Max Short length (s) before classification skips the probe.                                                              |
+| `TWITCH_BATCH_SIZE`         | 100                       | Helix `streams` ids per request.                                                                                         |
+| `TWITCH_RELIVE_COOLDOWN_MS` | 30 min                    | Suppresses a repeat go-live alert from a reconnect.                                                                      |
+| `TWITCH_AVATAR_REFRESH_MS`  | 24 h                      | How often stored Twitch streamer avatars are refreshed (one batched call per 100 ids).                                   |
+| `SEEN_RETENTION_DAYS`       | 90                        | `seen_items` retention before the daily prune.                                                                           |
+| `SEEN_PRUNE_INTERVAL_MS`    | 24 h                      | Prune sweep interval.                                                                                                    |
+| `WEBSUB.HUB_URL`            | Google's PubSubHubbub hub | The hub endpoint subscribe/unsubscribe requests are sent to.                                                             |
+| `WEBSUB.LEASE_SECONDS`      | 828000 (~9.6 days)        | Requested subscription lease length (the hub's maximum).                                                                 |
+| `WEBSUB.RENEW_CHECK_MS`     | 1 h                       | How often the background sync checks for leases needing renewal.                                                         |
+| `WEBSUB.RENEW_MARGIN_MS`    | 24 h                      | Renew a lease once less than this much time remains before it expires.                                                   |
+| `COLORS`, `TEMPLATES`       | —                         | Embed accent colors and default templates.                                                                               |
 
 ---
 
