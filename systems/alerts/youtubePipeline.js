@@ -52,16 +52,21 @@ async function processYoutubeChannel(ctx) {
     return;
   }
   if (feed.notModified) return;
-  if (feed.cacheEntry) feedCache.set(channelId, feed.cacheEntry);
 
   const { channelTitle, items } = feed;
   // videoId -> classified, per channel per cycle: N subs cost 1 classification.
   const classifyCache = new Map();
 
+  // Commit the conditional-request validators only when every item reached a
+  // terminal state (seen/posted/filtered). Anything left pending — classify
+  // error, upcoming premiere, failed post, quota break — must keep refetching
+  // unconditionally, or a 304 would defer its retry until the feed changes.
+  let allResolved = true;
+
   for (const item of items) {
     // Quota is global to the API key — once any channel trips it, stop
     // classifying everywhere rather than burning more calls that will fail.
-    if (state.quotaHit) break;
+    if (state.quotaHit) { allResolved = false; break; }
     try {
       const publishedMs = item.published ? Date.parse(item.published) : null;
 
@@ -90,13 +95,14 @@ async function processYoutubeChannel(ctx) {
       if (classified.error) {
         if (/\b403\b/.test(classified.error)) state.quotaHit = true;
         console.error('[alerts] YouTube classify failed:', item.videoId, classified.error);
+        allResolved = false;
         if (state.quotaHit) break;
         continue;
       }
 
       // Scheduled premiere / not-yet-started stream: skip WITHOUT marking
       // seen so it fires when it actually flips to live.
-      if (classified.type === 'upcoming') continue;
+      if (classified.type === 'upcoming') { allResolved = false; continue; }
 
       const type = classified.type || 'vod';
       const title = classified.title || item.title || 'New upload';
@@ -145,7 +151,15 @@ async function processYoutubeChannel(ctx) {
     } catch (err) {
       // One item must never abort the rest of the channel/cycle.
       console.error('[alerts] YouTube item error:', channelId, item.videoId, err.message);
+      allResolved = false;
     }
+  }
+
+  if (allResolved && feed.cacheEntry) {
+    feedCache.set(channelId, feed.cacheEntry);
+  } else {
+    // Guarantee an unconditional fetch next cycle.
+    feedCache.delete(channelId);
   }
 }
 

@@ -51,7 +51,7 @@ test('classifies once per video even with many subs, posts to each', async () =>
     subs: [makeSub({ id: 'a' }), makeSub({ id: 'b' })],
     youtubeApiKey: 'KEY',
     state,
-    postAlert: async (sub, text, roleIds, embed) => posts.push({ sub: sub.id, text }),
+    postAlert: async (sub, text) => posts.push({ sub: sub.id, text }),
     queries: makeFakeQueries(),
     provider: {
       fetchYoutubeFeed: async () => FEED,
@@ -162,4 +162,70 @@ test('notModified feed result is a no-op', async () => {
     },
   });
   assert.strictEqual(state.posted, 0);
+});
+
+test('classify error prevents the ETag from being committed', async () => {
+  _clearFeedCacheForTests();
+  const cacheEntriesSeen = [];
+  const provider = {
+    fetchYoutubeFeed: async (channelId, cacheEntry) => {
+      cacheEntriesSeen.push(cacheEntry);
+      return FEED;
+    },
+    classifyVideo: async () => ({ type: null, title: null, error: 'network: boom' }),
+  };
+  const q = makeFakeQueries();
+  await processYoutubeChannel({
+    channelId: 'UCx',
+    subs: [makeSub()],
+    youtubeApiKey: 'KEY',
+    state: { posted: 0, quotaHit: false },
+    postAlert: async () => {},
+    queries: q,
+    provider,
+  });
+  await processYoutubeChannel({
+    channelId: 'UCx',
+    subs: [makeSub()],
+    youtubeApiKey: 'KEY',
+    state: { posted: 0, quotaHit: false },
+    postAlert: async () => {},
+    queries: q,
+    provider,
+  });
+  assert.strictEqual(cacheEntriesSeen[0], undefined);
+  assert.strictEqual(cacheEntriesSeen[1], undefined, 'failed cycle must not commit the etag');
+});
+
+test('clean cycle commits the ETag for the next fetch', async () => {
+  _clearFeedCacheForTests();
+  const cacheEntriesSeen = [];
+  const provider = {
+    fetchYoutubeFeed: async (channelId, cacheEntry) => {
+      cacheEntriesSeen.push(cacheEntry);
+      return FEED;
+    },
+    classifyVideo: async () => ({ type: 'vod', title: 'One' }),
+  };
+  const q = makeFakeQueries();
+  await processYoutubeChannel({
+    channelId: 'UCx',
+    subs: [makeSub()],
+    youtubeApiKey: 'KEY',
+    state: { posted: 0, quotaHit: false },
+    postAlert: async () => {},
+    queries: q,
+    provider,
+  });
+  await processYoutubeChannel({
+    channelId: 'UCx',
+    subs: [makeSub()],
+    youtubeApiKey: 'KEY',
+    state: { posted: 0, quotaHit: false },
+    postAlert: async () => {},
+    queries: q,
+    provider,
+  });
+  assert.strictEqual(cacheEntriesSeen[0], undefined);
+  assert.deepStrictEqual(cacheEntriesSeen[1], { etag: 'W/"x"', lastModified: null });
 });
