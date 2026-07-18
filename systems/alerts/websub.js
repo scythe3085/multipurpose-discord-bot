@@ -57,7 +57,16 @@ function verifySignature(secret, rawBody, signatureHeader) {
 // Factored out so tests can spin the raw server with injected handlers.
 function _createServerForTests({ secret, onNotification }) {
   return http.createServer((req, res) => {
-    const url = new URL(req.url, 'http://localhost');
+    let url;
+    try {
+      url = new URL(req.url, 'http://localhost');
+    } catch {
+      // Node's HTTP parser accepts some request-targets the WHATWG URL parser
+      // rejects; this is unauthenticated remote input and must never throw.
+      res.writeHead(400);
+      res.end();
+      return;
+    }
 
     // Hub verification handshake: echo hub.challenge.
     if (req.method === 'GET') {
@@ -180,6 +189,7 @@ function syncSubscriptions() {
  */
 function init(postAlert) {
   if (!isEnabled()) return false;
+  stop(); // re-init must not leak a prior server/timer
   postAlertRef = postAlert;
 
   const port = Number(process.env.WEBSUB_PORT) || 8080;

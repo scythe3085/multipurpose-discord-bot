@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
+const net = require('node:net');
 const websub = require('../systems/alerts/websub.js');
 
 const ATOM = `<?xml version="1.0"?>
@@ -82,4 +83,32 @@ test('isEnabled only with WEBSUB_CALLBACK_URL set', () => {
   assert.strictEqual(websub.isEnabled({ WEBSUB_CALLBACK_URL: 'https://x.example/websub' }), true);
   assert.strictEqual(websub.isEnabled({}), false);
   assert.strictEqual(websub.isEnabled({ WEBSUB_CALLBACK_URL: '  ' }), false);
+});
+
+test('malformed request-target gets 400 and does not crash the server', async () => {
+  const srv = startServer();
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  try {
+    const port = srv.address().port;
+    const raw = await new Promise((resolve, reject) => {
+      const sock = net.connect(port, '127.0.0.1', () => {
+        sock.write('GET //[ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n');
+      });
+      let buf = '';
+      sock.on('data', d => (buf += d.toString()));
+      sock.on('end', () => resolve(buf));
+      sock.on('error', reject);
+      const t = setTimeout(() => {
+        sock.destroy();
+        resolve(buf);
+      }, 2000);
+      t.unref?.();
+    });
+    assert.match(raw, /HTTP\/1\.1 400/);
+    // The server must still be alive and serving.
+    const res = await fetch(`http://127.0.0.1:${port}/websub?hub.challenge=ok`);
+    assert.strictEqual(await res.text(), 'ok');
+  } finally {
+    srv.close();
+  }
 });
