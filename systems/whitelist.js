@@ -96,7 +96,19 @@ function parseSeedIds(raw) {
  * first server can be allowed before the bot ever joins it. Runs once at boot.
  */
 function seedFromEnv(env = process.env) {
-  const seeds = parseSeedIds(env.ALLOWED_GUILD_IDS);
+  const raw = (env.ALLOWED_GUILD_IDS || '').trim();
+  const seeds = parseSeedIds(raw);
+
+  // The most likely misconfiguration is a typo'd/misformatted id — warn loudly
+  // instead of silently seeding nothing.
+  if (raw && !seeds.length) {
+    console.warn(
+      '⚠️ ALLOWED_GUILD_IDS is set but contains no valid guild ids — check for typos.',
+    );
+  }
+
+  // add() persists the file once per new id. Fine here: this runs once at boot
+  // with a handful of ids at most.
   let added = 0;
   for (const id of seeds) {
     if (add(id)) added++;
