@@ -8,6 +8,10 @@ require('dotenv').config();
 // Single shared source of truth, also used by /add and /removeguild.
 const whitelist = require('./systems/whitelist.js');
 
+// Pre-seed the allow-list from .env so the first server can be allowed before
+// the bot ever joins it (no chicken-and-egg with the /add slash command).
+whitelist.seedFromEnv();
+
 // ====== SYSTEM HANDLERS ======
 const { handleTicketComponentOrModal } = require('./systems/tickets');
 const { handleVoiceStateUpdate, handleVcInteraction, initVcSystem } = require('./systems/vc');

@@ -79,4 +79,32 @@ function reload() {
   return load();
 }
 
-module.exports = { list, isAllowed, add, remove, reload };
+/** Parse a comma/whitespace-separated id list into valid snowflake strings. */
+function parseSeedIds(raw) {
+  return [
+    ...new Set(
+      String(raw || '')
+        .split(/[,\s]+/)
+        .map(s => s.trim())
+        .filter(s => /^\d{10,25}$/.test(s)),
+    ),
+  ];
+}
+
+/**
+ * Merge ALLOWED_GUILD_IDS from the environment into the allow-list, so the
+ * first server can be allowed before the bot ever joins it. Runs once at boot.
+ */
+function seedFromEnv(env = process.env) {
+  const seeds = parseSeedIds(env.ALLOWED_GUILD_IDS);
+  let added = 0;
+  for (const id of seeds) {
+    if (add(id)) added++;
+  }
+  if (added) {
+    console.log(`✅ Whitelist: seeded ${added} guild id(s) from ALLOWED_GUILD_IDS.`);
+  }
+  return added;
+}
+
+module.exports = { list, isAllowed, add, remove, reload, parseSeedIds, seedFromEnv };
