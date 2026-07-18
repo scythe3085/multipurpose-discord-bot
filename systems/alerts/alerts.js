@@ -128,6 +128,7 @@ async function alertsAdd(interaction) {
 
     const channelId = resolved.channelId;
     const label = resolved.label || channelId;
+    const avatarUrl = await yt.fetchChannelAvatar(channelId, youtubeApiKey);
 
     if (q.subscriptionExists(interaction.guildId, provider, channelId, postChannel.id)) {
       return interaction.editReply({
@@ -149,6 +150,7 @@ async function alertsAdd(interaction) {
       createdBy: interaction.user.id,
       createdAt: now,
       customTemplate: null,
+      avatarUrl,
     });
 
     return interaction.editReply({
@@ -208,6 +210,7 @@ async function alertsAdd(interaction) {
       createdBy: interaction.user.id,
       createdAt: now,
       customTemplate: null,
+      avatarUrl: u.avatarUrl || null,
     });
 
     return interaction.editReply({

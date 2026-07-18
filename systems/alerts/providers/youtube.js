@@ -352,10 +352,31 @@ async function resolveChannelId(inputRaw, apiKey) {
   return null;
 }
 
+/**
+ * Fetch a channel's avatar thumbnail via the Data API. Best-effort: returns
+ * null without an API key or on any failure (the embed just omits the icon).
+ */
+async function fetchChannelAvatar(channelId, apiKey) {
+  if (!apiKey) return null;
+  const url =
+    'https://www.googleapis.com/youtube/v3/channels' +
+    `?part=snippet&id=${encodeURIComponent(channelId)}&key=${encodeURIComponent(apiKey)}`;
+  try {
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const thumbs = json?.items?.[0]?.snippet?.thumbnails;
+    return thumbs?.medium?.url || thumbs?.default?.url || null;
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   extractChannelId,
   resolveChannelId,
   fetchYoutubeFeed,
   classifyVideo,
   probeIsShort,
+  fetchChannelAvatar,
 };

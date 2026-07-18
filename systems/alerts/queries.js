@@ -10,9 +10,9 @@ function insertSubscription(row) {
   db.prepare(
     `
     INSERT INTO subscriptions
-    (id, guildId, provider, sourceId, sourceLabel, sourceLogin, types, discordChannelId, mentionRoleIds, enabled, createdBy, createdAt, customTemplate)
+    (id, guildId, provider, sourceId, sourceLabel, sourceLogin, types, discordChannelId, mentionRoleIds, enabled, createdBy, createdAt, customTemplate, avatarUrl)
     VALUES
-    (@id, @guildId, @provider, @sourceId, @sourceLabel, @sourceLogin, @types, @discordChannelId, @mentionRoleIds, @enabled, @createdBy, @createdAt, @customTemplate)
+    (@id, @guildId, @provider, @sourceId, @sourceLabel, @sourceLogin, @types, @discordChannelId, @mentionRoleIds, @enabled, @createdBy, @createdAt, @customTemplate, @avatarUrl)
   `,
   ).run(row);
 }
@@ -107,6 +107,21 @@ function setMentionRoles(id, guildId, rolesJson) {
   );
 }
 
+function getDistinctSourceIds(provider) {
+  return db
+    .prepare(`SELECT DISTINCT sourceId FROM subscriptions WHERE provider=? AND enabled=1`)
+    .all(provider)
+    .map(r => r.sourceId);
+}
+
+function setAvatarForSource(provider, sourceId, url) {
+  db.prepare(`UPDATE subscriptions SET avatarUrl=? WHERE provider=? AND sourceId=?`).run(
+    url,
+    provider,
+    sourceId,
+  );
+}
+
 module.exports = {
   insertSubscription,
   markSeen,
@@ -122,4 +137,6 @@ module.exports = {
   setCustomTemplate,
   clearCustomTemplate,
   setMentionRoles,
+  getDistinctSourceIds,
+  setAvatarForSource,
 };

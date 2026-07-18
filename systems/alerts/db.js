@@ -74,4 +74,8 @@ ensureColumn(
   `ALTER TABLE subscriptions ADD COLUMN lastLiveAlertAt INTEGER`,
 );
 
+// avatarUrl: source channel/streamer avatar for the alert embed author icon.
+// Filled at subscribe time; Twitch rows are refreshed daily by the poller.
+ensureColumn('subscriptions', 'avatarUrl', `ALTER TABLE subscriptions ADD COLUMN avatarUrl TEXT`);
+
 module.exports = db;

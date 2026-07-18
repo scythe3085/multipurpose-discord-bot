@@ -57,7 +57,12 @@ async function resolveUser(login, clientId, clientSecret) {
   const json = await twitchApiGet(`users?login=${encodeURIComponent(login)}`, clientId, token);
   const u = json?.data?.[0];
   if (!u) return null;
-  return { id: u.id, name: u.display_name || u.login, login: u.login };
+  return {
+    id: u.id,
+    name: u.display_name || u.login,
+    login: u.login,
+    avatarUrl: u.profile_image_url || null,
+  };
 }
 
 // Single-broadcaster lookup. No longer used by alerts.js (the poller batches via
@@ -110,8 +115,37 @@ async function getLiveStreams(userIds, clientId, clientSecret, batchSize = 100) 
   return map;
 }
 
+/**
+ * Batch-fetch user profiles for many broadcaster ids.
+ * Returns Map<user_id, { name, login, avatarUrl }>.
+ */
+async function getUsersByIds(userIds, clientId, clientSecret, batchSize = 100) {
+  const ids = [...new Set((userIds || []).filter(Boolean).map(String))];
+  const map = new Map();
+  if (!ids.length) return map;
+
+  const token = await getAppToken(clientId, clientSecret);
+  for (const group of chunk(ids, batchSize)) {
+    const qs = group.map(id => `id=${encodeURIComponent(id)}`).join('&');
+    try {
+      const json = await twitchApiGet(`users?${qs}`, clientId, token);
+      for (const u of json?.data || []) {
+        map.set(String(u.id), {
+          name: u.display_name || u.login,
+          login: u.login,
+          avatarUrl: u.profile_image_url || null,
+        });
+      }
+    } catch (err) {
+      console.error('Twitch users batch failed:', err.message);
+    }
+  }
+  return map;
+}
+
 module.exports = {
   resolveUser,
   getStreamIfLive,
   getLiveStreams,
+  getUsersByIds,
 };

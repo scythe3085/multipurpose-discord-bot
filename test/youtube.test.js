@@ -210,3 +210,28 @@ test('resolveChannelId: unresolvable input returns null', async () => {
     restore();
   }
 });
+
+test('fetchChannelAvatar returns a thumbnail url, null without key or on error', async () => {
+  const restore = stubFetch([
+    [
+      'youtube/v3/channels',
+      fakeResponse({
+        json: {
+          items: [
+            {
+              snippet: {
+                thumbnails: { default: { url: 'https://yt.example/d.jpg' }, medium: { url: 'https://yt.example/m.jpg' } },
+              },
+            },
+          ],
+        },
+      }),
+    ],
+  ]);
+  try {
+    assert.strictEqual(await yt.fetchChannelAvatar('UCx', 'KEY'), 'https://yt.example/m.jpg');
+    assert.strictEqual(await yt.fetchChannelAvatar('UCx', ''), null);
+  } finally {
+    restore();
+  }
+});
