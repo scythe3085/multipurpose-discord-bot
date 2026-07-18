@@ -130,13 +130,14 @@ async function alertsAdd(interaction) {
 
     const channelId = resolved.channelId;
     const label = resolved.label || channelId;
-    const avatarUrl = await yt.fetchChannelAvatar(channelId, youtubeApiKey);
 
     if (q.subscriptionExists(interaction.guildId, provider, channelId, postChannel.id)) {
       return interaction.editReply({
         content: `\u26A0\uFE0F **${label}** is already set up to post in ${postChannel}.`,
       });
     }
+
+    const avatarUrl = await yt.fetchChannelAvatar(channelId, youtubeApiKey);
 
     q.insertSubscription({
       id,
@@ -245,27 +246,32 @@ async function alertsList(interaction) {
     });
   }
 
+  const PROVIDER_EMOJI = { youtube: '\uD83D\uDCFA', twitch: '\uD83D\uDFE3' }; // \uD83D\uDCFA \uD83D\uDFE3
+
   const embed = new EmbedBuilder()
-    .setTitle('\uD83D\uDD14 Alerts configured for this server')
+    .setTitle('\uD83D\uDD14 Alert subscriptions') // \uD83D\uDD14
+    .setColor(0x57f287)
     .setDescription(
-      'Use `/alerts remove id:<id>` to delete one, `/alerts roles id:<id>` to change role mentions, ' +
-        'or `/alerts template id:<id> template:<text>` to customise the message.',
+      `**${rows.length}** subscription${rows.length === 1 ? '' : 's'} configured for this server.\n` +
+        '`/alerts remove id:<id>` \u00B7 `/alerts roles id:<id>` \u00B7 `/alerts template id:<id>`',
     )
     .setTimestamp();
 
   for (const r of rows.slice(0, 20)) {
     const types = safeJsonParse(r.types, []).map(displayType);
-    const prettyTypes = types.length ? types.join(' / ') : 'none';
     const roles = safeJsonParse(r.mentionRoleIds, []);
 
     embed.addFields({
-      name: `${r.provider.toUpperCase()} \u2022 ${r.sourceLabel} \u2022 ${r.enabled ? 'enabled' : 'disabled'}`,
+      name: `${PROVIDER_EMOJI[r.provider] ?? '\uD83D\uDD14'} ${r.sourceLabel}${r.enabled ? '' : ' \u00B7 \u26D4 disabled'}`,
       value:
-        `**ID:** \`${r.id}\`\n` +
-        `**Types:** ${prettyTypes}\n` +
-        `**Post to:** <#${r.discordChannelId}>\n` +
-        `**Roles:** ${roles.length ? roles.map(id => `<@&${id}>`).join(' ') : '_none_'}`,
+        `**Types:** ${types.length ? types.join(' \u00B7 ') : 'none'} \u2192 <#${r.discordChannelId}>\n` +
+        `**Roles:** ${roles.length ? roles.map(id => `<@&${id}>`).join(' ') : '_none_'}\n` +
+        `**ID:** \`${r.id}\``,
     });
+  }
+
+  if (rows.length > 20) {
+    embed.setFooter({ text: `Showing 20 of ${rows.length} \u2014 remove some to see the rest` });
   }
 
   return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
@@ -462,11 +468,12 @@ async function alertsTemplatePreview(interaction) {
   const previewText = formatTemplate(template, fake);
 
   const embed = new EmbedBuilder()
-    .setTitle('\uD83D\uDD0E Template preview')
+    .setTitle('\uD83D\uDD0E Template preview') // \uD83D\uDD0E
+    .setColor(provider === 'twitch' ? 0x9146ff : 0xff0000)
     .setDescription(
       `**Subscription:** \`${row.id}\`\n` +
         `**Provider:** ${provider}\n` +
-        `**Using:** ${hasCustom ? 'custom' : 'default'}\n\n` +
+        `**Using:** ${hasCustom ? '\u270F\uFE0F custom template' : '\uD83D\uDCE6 default template'}\n\n` +
         '**Preview:**\n' +
         previewText,
     )

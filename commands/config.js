@@ -222,6 +222,7 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setTitle('🛠 Server Configuration')
+        .setColor(problems.length ? 0xfee75c : 0x57f287)
         .setDescription(
           'Current settings for this server. Use the subcommands of `/config` to change them.',
         )
@@ -305,6 +306,7 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setTitle('✅ Quick Setup Complete')
+        .setColor(problems.length ? 0xfee75c : 0x57f287)
         .setDescription('I saved the configuration for this server. Here is a summary:')
         .addFields(
           {
