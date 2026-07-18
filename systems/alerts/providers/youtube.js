@@ -27,10 +27,11 @@ function extractChannelId(inputRaw) {
 }
 
 /**
- * Fetch RSS XML with retries + browser-like headers
- * (YouTube RSS is flaky without these)
+ * Fetch RSS XML with retries + browser-like headers, using conditional
+ * requests when a prior { etag, lastModified } cache entry is supplied.
+ * Returns { text, cacheEntry } on 200 or { notModified: true } on 304.
  */
-async function fetchRssTextWithRetry(url) {
+async function fetchRssTextWithRetry(url, cacheEntry = null) {
   const tries = 3;
   const timeoutMs = 15000;
 
@@ -39,17 +40,19 @@ async function fetchRssTextWithRetry(url) {
     const t = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
-          Accept: 'application/xml,text/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-GB,en;q=0.9',
-        },
-      });
+      const headers = {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+        Accept: 'application/xml,text/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-GB,en;q=0.9',
+      };
+      if (cacheEntry?.etag) headers['If-None-Match'] = cacheEntry.etag;
+      if (cacheEntry?.lastModified) headers['If-Modified-Since'] = cacheEntry.lastModified;
 
+      const res = await fetch(url, { signal: controller.signal, headers });
       clearTimeout(t);
+
+      if (res.status === 304) return { notModified: true };
 
       // Retry on temporary YouTube edge errors
       if ([500, 502, 503, 504].includes(res.status)) {
@@ -64,7 +67,13 @@ async function fetchRssTextWithRetry(url) {
         throw new Error(`YouTube RSS fetch failed: ${res.status}`);
       }
 
-      return await res.text();
+      return {
+        text: await res.text(),
+        cacheEntry: {
+          etag: res.headers?.get?.('etag') ?? null,
+          lastModified: res.headers?.get?.('last-modified') ?? null,
+        },
+      };
     } catch (err) {
       clearTimeout(t);
       if (attempt >= tries) throw err;
@@ -78,7 +87,7 @@ async function fetchRssTextWithRetry(url) {
 /**
  * Fetch and parse a YouTube channel RSS feed
  */
-async function fetchYoutubeFeed(channelId) {
+async function fetchYoutubeFeed(channelId, cacheEntry = null) {
   const id = (channelId || '').trim();
 
   // Try both hosts (some networks behave differently)
@@ -87,21 +96,22 @@ async function fetchYoutubeFeed(channelId) {
     `https://youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(id)}`,
   ];
 
-  let xml = null;
+  let result = null;
   let lastErr = null;
 
   for (const url of urls) {
     try {
-      xml = await fetchRssTextWithRetry(url);
+      result = await fetchRssTextWithRetry(url, cacheEntry);
       break;
     } catch (e) {
       lastErr = e;
     }
   }
 
-  if (!xml) throw lastErr || new Error('YouTube RSS fetch failed');
+  if (!result) throw lastErr || new Error('YouTube RSS fetch failed');
+  if (result.notModified) return { notModified: true };
 
-  const data = parser.parse(xml);
+  const data = parser.parse(result.text);
 
   const feed = data.feed;
   const entries = feed?.entry ? (Array.isArray(feed.entry) ? feed.entry : [feed.entry]) : [];
@@ -125,7 +135,7 @@ async function fetchYoutubeFeed(channelId) {
     // uploads from starving the older unseen items below a slice cutoff.
     .reverse();
 
-  return { channelTitle, items };
+  return { channelTitle, items, cacheEntry: result.cacheEntry };
 }
 
 /**
@@ -239,20 +249,20 @@ async function classifyVideo(videoId, youtubeApiKey) {
 
   // Longer than the max Short length => definitely a normal video; skip the probe.
   if (typeof durationSec === 'number' && durationSec > config.SHORTS_MAX_DURATION) {
-    return { type: 'vod', title };
+    return { type: 'vod', title, durationSec };
   }
 
   // Ambiguous (<= 180s or unknown duration): probe the /shorts/ URL.
   const isShort = await probeIsShort(videoId);
-  if (isShort === true) return { type: 'shorts', title };
-  if (isShort === false) return { type: 'vod', title };
+  if (isShort === true) return { type: 'shorts', title, durationSec };
+  if (isShort === false) return { type: 'vod', title, durationSec };
 
   // Probe inconclusive: fall back to the legacy heuristic (Shorts were <=60s
   // before the probe existed). Deliberately 60s, not SHORTS_MAX_DURATION.
   if (typeof durationSec === 'number' && durationSec <= 60) {
-    return { type: 'shorts', title };
+    return { type: 'shorts', title, durationSec };
   }
-  return { type: 'vod', title };
+  return { type: 'vod', title, durationSec };
 }
 
 /** Look up a channel id from the Data API channels endpoint. */

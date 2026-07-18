@@ -220,7 +220,10 @@ test('fetchChannelAvatar returns a thumbnail url, null without key or on error',
           items: [
             {
               snippet: {
-                thumbnails: { default: { url: 'https://yt.example/d.jpg' }, medium: { url: 'https://yt.example/m.jpg' } },
+                thumbnails: {
+                  default: { url: 'https://yt.example/d.jpg' },
+                  medium: { url: 'https://yt.example/m.jpg' },
+                },
               },
             },
           ],
@@ -231,6 +234,91 @@ test('fetchChannelAvatar returns a thumbnail url, null without key or on error',
   try {
     assert.strictEqual(await yt.fetchChannelAvatar('UCx', 'KEY'), 'https://yt.example/m.jpg');
     assert.strictEqual(await yt.fetchChannelAvatar('UCx', ''), null);
+  } finally {
+    restore();
+  }
+});
+
+function fakeXmlResponse({ status = 200, text = '', etag = null, lastModified = null } = {}) {
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: {
+      get: name => {
+        const n = String(name).toLowerCase();
+        if (n === 'etag') return etag;
+        if (n === 'last-modified') return lastModified;
+        return null;
+      },
+    },
+    async text() {
+      return text;
+    },
+  };
+}
+
+const SAMPLE_FEED = `<?xml version="1.0"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <title>Chan</title>
+  <entry>
+    <yt:videoId>vidA</yt:videoId>
+    <title>Video A</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=vidA"/>
+    <published>2026-07-01T00:00:00+00:00</published>
+  </entry>
+</feed>`;
+
+test('fetchYoutubeFeed: 200 returns items plus a cacheEntry with the etag', async () => {
+  const restore = stubFetch([
+    ['feeds/videos.xml', fakeXmlResponse({ text: SAMPLE_FEED, etag: 'W/"abc"' })],
+  ]);
+  try {
+    const feed = await yt.fetchYoutubeFeed('UCx');
+    assert.strictEqual(feed.items.length, 1);
+    assert.strictEqual(feed.items[0].videoId, 'vidA');
+    assert.strictEqual(feed.cacheEntry.etag, 'W/"abc"');
+  } finally {
+    restore();
+  }
+});
+
+test('fetchYoutubeFeed: sends If-None-Match and short-circuits on 304', async () => {
+  let sentHeader = null;
+  const restore = stubFetch([
+    [
+      'feeds/videos.xml',
+      () => {
+        sentHeader = globalThis.__lastFetchOptions?.headers?.['If-None-Match'] ?? null;
+        return fakeXmlResponse({ status: 304 });
+      },
+    ],
+  ]);
+  // wrap the stub so the second fetch arg (options) is captured
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    globalThis.__lastFetchOptions = options;
+    return inner(url, options);
+  };
+  try {
+    const feed = await yt.fetchYoutubeFeed('UCx', { etag: 'W/"abc"', lastModified: null });
+    assert.strictEqual(feed.notModified, true);
+    assert.strictEqual(sentHeader, 'W/"abc"');
+  } finally {
+    globalThis.fetch = inner;
+    restore();
+    delete globalThis.__lastFetchOptions;
+  }
+});
+
+test('classifyVideo: vod result includes durationSec', async () => {
+  const restore = stubFetch([
+    ['googleapis.com', apiVideo('PT12M34S')],
+    ['/shorts/', fakeResponse({ status: 0, type: 'opaqueredirect' })],
+  ]);
+  try {
+    const r = await yt.classifyVideo('abc', 'KEY');
+    assert.strictEqual(r.type, 'vod');
+    assert.strictEqual(r.durationSec, 754);
   } finally {
     restore();
   }
