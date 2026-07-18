@@ -89,13 +89,15 @@ async function handleVcButton(interaction) {
     const current = meta.privacy || 'public';
     const next = nextPrivacy(current);
 
+    // Privacy = several permission-overwrite REST calls; defer so a slow batch
+    // can't blow the 3s ack window.
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       await applyPrivacy(voiceChannel, guild, meta, next);
     } catch (err) {
       console.error('Failed to apply privacy mode:', err);
-      return interaction.reply({
+      return interaction.editReply({
         content: '\u26A0\uFE0F Failed to update privacy. Check bot permissions and try again.',
-        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -109,10 +111,12 @@ async function handleVcButton(interaction) {
         '\uD83E\uDD1D VC is now **Friends-only**. Owner, co-owners, and your friends list can join.',
       private: '\uD83D\uDD12 VC is now **Private**. Only the owner and co-owners can join.',
     };
-    await interaction.reply({ content: replyByMode[next], flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: replyByMode[next] });
 
     if (typeof voiceChannel.send === 'function') {
-      await sendVcPanel(voiceChannel, voiceChannel, guild);
+      sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+        console.error('Failed to refresh VC panel:', err),
+      );
     }
     return;
   }
@@ -157,7 +161,9 @@ async function handleVcButton(interaction) {
     await interaction.reply({ content: replyText, flags: MessageFlags.Ephemeral });
 
     if (typeof voiceChannel.send === 'function') {
-      await sendVcPanel(voiceChannel, voiceChannel, guild);
+      sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+        console.error('Failed to refresh VC panel:', err),
+      );
     }
     return;
   }
@@ -172,10 +178,10 @@ async function handleVcButton(interaction) {
       content: '\uD83D\uDDD1 Deleting this VC...',
       flags: MessageFlags.Ephemeral,
     });
-    await logVcEvent(
+    logVcEvent(
       guild,
       `\uD83D\uDDD1 VC deleted via panel: **${voiceChannel.name}** by **${interaction.user.tag}**`,
-    );
+    ).catch(() => {});
     try {
       await voiceChannel.delete('VC deleted by controller via panel');
     } catch (err) {
@@ -185,26 +191,32 @@ async function handleVcButton(interaction) {
   }
 
   if (action === 'vc_refresh') {
-    if (typeof voiceChannel.send === 'function') {
-      await sendVcPanel(voiceChannel, voiceChannel, guild);
-    }
-    return interaction.reply({
+    await interaction.reply({
       content: '\uD83D\uDD04 VC panel refreshed.',
       flags: MessageFlags.Ephemeral,
     });
+    if (typeof voiceChannel.send === 'function') {
+      sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+        console.error('Failed to refresh VC panel:', err),
+      );
+    }
+    return;
   }
 
   // Legacy button from a pre-privacy-cycle panel still hanging around.
   // Refresh the panel so the user gets the new control set.
   if (action === 'vc_lock_toggle') {
-    if (typeof voiceChannel.send === 'function') {
-      await sendVcPanel(voiceChannel, voiceChannel, guild);
-    }
-    return interaction.reply({
+    await interaction.reply({
       content:
         '\u2139\uFE0F The lock toggle was replaced by a 3-state Privacy button. Panel refreshed \u2014 try the new button.',
       flags: MessageFlags.Ephemeral,
     });
+    if (typeof voiceChannel.send === 'function') {
+      sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+        console.error('Failed to refresh VC panel:', err),
+      );
+    }
+    return;
   }
 }
 
@@ -245,19 +257,21 @@ async function handleVcModal(interaction) {
 
   if (isRename) {
     const newName = interaction.fields.getTextInputValue('vc_new_name');
+    // Channel renames are rate-limited (2/10min); a queued rename can take
+    // minutes. Defer keeps the token alive for up to 15 minutes.
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await voiceChannel.setName(newName);
 
     if (interaction.user.id === meta.ownerId && vcPrefs.isProfileEnabled(guild.id, meta.ownerId)) {
       vcPrefs.patchProfile(guild.id, meta.ownerId, { name: newName });
     }
 
-    await interaction.reply({
-      content: `\u2705 VC renamed to **${newName}**.`,
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.editReply({ content: `\u2705 VC renamed to **${newName}**.` });
 
     if (typeof voiceChannel.send === 'function') {
-      await sendVcPanel(voiceChannel, voiceChannel, guild);
+      sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+        console.error('Failed to refresh VC panel:', err),
+      );
     }
     return;
   }
@@ -273,6 +287,7 @@ async function handleVcModal(interaction) {
       });
     }
 
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await voiceChannel.setUserLimit(value);
 
     if (interaction.user.id === meta.ownerId && vcPrefs.isProfileEnabled(guild.id, meta.ownerId)) {
@@ -280,13 +295,14 @@ async function handleVcModal(interaction) {
     }
 
     const nice = value === 0 ? 'no limit' : `${value}`;
-    await interaction.reply({
+    await interaction.editReply({
       content: `\u2705 User limit for this VC is now **${nice}**.`,
-      flags: MessageFlags.Ephemeral,
     });
 
     if (typeof voiceChannel.send === 'function') {
-      await sendVcPanel(voiceChannel, voiceChannel, guild);
+      sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+        console.error('Failed to refresh VC panel:', err),
+      );
     }
     return;
   }
@@ -344,6 +360,7 @@ async function handleVcSelect(interaction) {
       meta.banned.add(member.id);
       tempVoiceChannels.set(vcId, meta);
 
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await voiceChannel.permissionOverwrites.edit(member.id, {
         Connect: false,
         ViewChannel: true,
@@ -354,13 +371,14 @@ async function handleVcSelect(interaction) {
         } catch (_) {}
       }
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `🚫 ${member} has been **banned from this VC only** (they can still use other channels).`,
-        flags: MessageFlags.Ephemeral,
       });
 
       if (typeof voiceChannel.send === 'function') {
-        await sendVcPanel(voiceChannel, voiceChannel, guild);
+        sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+          console.error('Failed to refresh VC panel:', err),
+        );
       }
       return;
     }
@@ -375,15 +393,17 @@ async function handleVcSelect(interaction) {
       meta.banned.delete(member.id);
       tempVoiceChannels.set(vcId, meta);
 
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await voiceChannel.permissionOverwrites.edit(member.id, { Connect: null, ViewChannel: null });
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `✅ ${member} has been **unbanned** from this VC.`,
-        flags: MessageFlags.Ephemeral,
       });
 
       if (typeof voiceChannel.send === 'function') {
-        await sendVcPanel(voiceChannel, voiceChannel, guild);
+        sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+          console.error('Failed to refresh VC panel:', err),
+        );
       }
       return;
     }
@@ -403,6 +423,7 @@ async function handleVcSelect(interaction) {
       meta.banned.add(member.id);
       tempVoiceChannels.set(vcId, meta);
 
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await voiceChannel.permissionOverwrites.edit(member.id, {
         Connect: false,
         ViewChannel: true,
@@ -413,18 +434,19 @@ async function handleVcSelect(interaction) {
         } catch (_) {}
       }
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `\uD83D\uDEAB ${member} has been **banned from this VC only** (they can still use other channels).`,
-        flags: MessageFlags.Ephemeral,
       });
 
       if (typeof voiceChannel.send === 'function') {
-        await sendVcPanel(voiceChannel, voiceChannel, guild);
+        sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+          console.error('Failed to refresh VC panel:', err),
+        );
       }
-      await logVcEvent(
+      logVcEvent(
         guild,
         `\uD83D\uDEAB ${member.user.tag} banned from VC **${voiceChannel.name}** by **${interaction.user.tag}**`,
-      );
+      ).catch(() => {});
       return;
     }
 
@@ -438,20 +460,22 @@ async function handleVcSelect(interaction) {
       meta.banned.delete(member.id);
       tempVoiceChannels.set(vcId, meta);
 
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await voiceChannel.permissionOverwrites.edit(member.id, { Connect: null, ViewChannel: null });
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `\u2705 ${member} has been **unbanned** from this VC.`,
-        flags: MessageFlags.Ephemeral,
       });
 
       if (typeof voiceChannel.send === 'function') {
-        await sendVcPanel(voiceChannel, voiceChannel, guild);
+        sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+          console.error('Failed to refresh VC panel:', err),
+        );
       }
-      await logVcEvent(
+      logVcEvent(
         guild,
         `\u2705 ${member.user.tag} unbanned from VC **${voiceChannel.name}** by **${interaction.user.tag}**`,
-      );
+      ).catch(() => {});
       return;
     }
   }
@@ -480,6 +504,7 @@ async function handleVcSelect(interaction) {
 
       // Make sure new co-owner can always join / see the VC,
       // even if it is currently locked.
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       try {
         await voiceChannel.permissionOverwrites.edit(member.id, {
           Connect: true,
@@ -489,18 +514,19 @@ async function handleVcSelect(interaction) {
         console.error('Failed to apply co-owner permission overrides:', err);
       }
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `\uD83E\uDD1D ${member} is now a **co-owner** of this VC.`,
-        flags: MessageFlags.Ephemeral,
       });
 
       if (typeof voiceChannel.send === 'function') {
-        await sendVcPanel(voiceChannel, voiceChannel, guild);
+        sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+          console.error('Failed to refresh VC panel:', err),
+        );
       }
-      await logVcEvent(
+      logVcEvent(
         guild,
         `\uD83E\uDD1D ${member.user.tag} made co-owner of VC **${voiceChannel.name}** by **${interaction.user.tag}**`,
-      );
+      ).catch(() => {});
       return;
     }
 
@@ -516,6 +542,7 @@ async function handleVcSelect(interaction) {
       tempVoiceChannels.set(vcId, meta);
 
       // Optional tidy-up: clear explicit overrides so they go back to normal
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       try {
         await voiceChannel.permissionOverwrites.edit(member.id, {
           Connect: null,
@@ -525,18 +552,19 @@ async function handleVcSelect(interaction) {
         console.error('Failed to clear co-owner overrides on remove:', err);
       }
 
-      await interaction.reply({
+      await interaction.editReply({
         content: `\u274C ${member} is no longer a co-owner of this VC.`,
-        flags: MessageFlags.Ephemeral,
       });
 
       if (typeof voiceChannel.send === 'function') {
-        await sendVcPanel(voiceChannel, voiceChannel, guild);
+        sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+          console.error('Failed to refresh VC panel:', err),
+        );
       }
-      await logVcEvent(
+      logVcEvent(
         guild,
         `\u274C ${member.user.tag} removed as co-owner of VC **${voiceChannel.name}** by **${interaction.user.tag}**`,
-      );
+      ).catch(() => {});
       return;
     }
   }

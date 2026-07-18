@@ -1,4 +1,11 @@
-const { Client, Collection, GatewayIntentBits, Events, MessageFlags } = require('discord.js');
+const {
+  Client,
+  Collection,
+  GatewayIntentBits,
+  Events,
+  MessageFlags,
+  Options,
+} = require('discord.js');
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -33,6 +40,13 @@ const client = new Client({
     // messages, so streaming every guild message was pure wasted bandwidth.
     GatewayIntentBits.MessageContent,
   ],
+  // Nothing consumes live message/reaction events (transcripts REST-fetch on
+  // close), so caching them only burns memory and GC time.
+  makeCache: Options.cacheWithLimits({
+    ...Options.DefaultMakeCacheSettings,
+    MessageManager: 0,
+    ReactionManager: 0,
+  }),
 });
 
 // ====== LOAD COMMANDS ======

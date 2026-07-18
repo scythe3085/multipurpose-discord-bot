@@ -143,14 +143,14 @@ async function grantVerifiedRole(interaction, member, guild, vc, { accountAgeMs,
     flags: MessageFlags.Ephemeral,
   });
 
-  await logVerify(guild, {
+  logVerify(guild, {
     severity: 'success',
     title: viaChallenge ? '✅ Verified (via word challenge)' : '✅ Verified',
     fields: [
       userField(member.user),
       { name: 'Account age', value: formatDuration(accountAgeMs), inline: true },
     ],
-  });
+  }).catch(() => {});
 }
 
 // ---- Slash: /verify panel ----
@@ -218,17 +218,17 @@ async function runPreChecks(interaction, member, guild, { recordAttempt = true }
 
   // Block bot accounts
   if (interaction.user.bot) {
-    await logVerify(guild, {
-      severity: 'warning',
-      title: '🤖 Bot account blocked',
-      fields: [userField(interaction.user)],
-    });
     await interaction.reply({
       content:
         '🤖 Bots cannot use the automatic verification system.\n' +
         'If this is a trusted bot, a staff member can manually give it the Verified role.',
       flags: MessageFlags.Ephemeral,
     });
+    logVerify(guild, {
+      severity: 'warning',
+      title: '🤖 Bot account blocked',
+      fields: [userField(interaction.user)],
+    }).catch(() => {});
     return { halt: true };
   }
 
@@ -249,7 +249,14 @@ async function runPreChecks(interaction, member, guild, { recordAttempt = true }
     recordVerifyAttempt(guild.id, interaction.user.id);
     if (isRaidLocked(guild.id)) {
       const remaining = getRaidLockRemaining(guild.id);
-      await logVerify(guild, {
+      await interaction.reply({
+        content:
+          '⛔ Verification is temporarily paused due to unusual activity (possible raid).\n' +
+          `Please try again in **${formatDuration(remaining)}**.\n\n` +
+          'If you think this is an error, please contact staff.',
+        flags: MessageFlags.Ephemeral,
+      });
+      logVerify(guild, {
         severity: 'fail',
         title: '🚨 Raid protection triggered',
         fields: [
@@ -260,14 +267,7 @@ async function runPreChecks(interaction, member, guild, { recordAttempt = true }
             inline: true,
           },
         ],
-      });
-      await interaction.reply({
-        content:
-          '⛔ Verification is temporarily paused due to unusual activity (possible raid).\n' +
-          `Please try again in **${formatDuration(remaining)}**.\n\n` +
-          'If you think this is an error, please contact staff.',
-        flags: MessageFlags.Ephemeral,
-      });
+      }).catch(() => {});
       return { halt: true };
     }
   }
@@ -298,7 +298,7 @@ async function runPreChecks(interaction, member, guild, { recordAttempt = true }
     });
 
     if (staticConfig.SECURITY.LOG_FAILS) {
-      await logVerify(guild, {
+      logVerify(guild, {
         severity: 'warning',
         title: '🚫 Verify rejected — account too new',
         fields: [
@@ -306,7 +306,7 @@ async function runPreChecks(interaction, member, guild, { recordAttempt = true }
           { name: 'Account age', value: formatDuration(accountAgeMs), inline: true },
           { name: 'Required', value: formatDuration(minAccount), inline: true },
         ],
-      });
+      }).catch(() => {});
     }
     return { halt: true };
   }
@@ -338,8 +338,9 @@ async function handleVerifyButton(interaction) {
 
   if (fastClicker && staticConfig.SECURITY.WORD_CHALLENGE.ENABLED) {
     const word = pickChallengeWord();
+    await interaction.showModal(buildWordChallengeModal(word));
     if (staticConfig.SECURITY.LOG_FAILS) {
-      await logVerify(guild, {
+      logVerify(guild, {
         severity: 'info',
         title: '⏱ Word challenge issued',
         fields: [
@@ -348,9 +349,9 @@ async function handleVerifyButton(interaction) {
           { name: 'Threshold', value: formatDuration(minJoinAge), inline: true },
           { name: 'Word', value: `\`${word}\``, inline: true },
         ],
-      });
+      }).catch(() => {});
     }
-    return interaction.showModal(buildWordChallengeModal(word));
+    return;
   }
 
   // Passed all checks — verify directly.
@@ -377,8 +378,14 @@ async function handleVerifyWordModal(interaction) {
   const submitted = (interaction.fields.getTextInputValue('verify_word_input') || '').trim();
 
   if (!expected || expected.toUpperCase() !== submitted.toUpperCase()) {
+    await interaction.reply({
+      content:
+        '⛔ That did not match the word shown. Please go back to the verify panel and try again.\n' +
+        'If you keep having trouble, contact staff.',
+      flags: MessageFlags.Ephemeral,
+    });
     if (staticConfig.SECURITY.LOG_FAILS) {
-      await logVerify(guild, {
+      logVerify(guild, {
         severity: 'fail',
         title: '❌ Word challenge failed',
         fields: [
@@ -386,14 +393,9 @@ async function handleVerifyWordModal(interaction) {
           { name: 'Typed', value: `\`${submitted || '_(empty)_'}\``, inline: true },
           { name: 'Expected', value: `\`${expected}\``, inline: true },
         ],
-      });
+      }).catch(() => {});
     }
-    return interaction.reply({
-      content:
-        '⛔ That did not match the word shown. Please go back to the verify panel and try again.\n' +
-        'If you keep having trouble, contact staff.',
-      flags: MessageFlags.Ephemeral,
-    });
+    return;
   }
 
   // Re-run the key checks at submit time (account age etc) since some time has passed

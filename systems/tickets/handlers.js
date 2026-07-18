@@ -127,6 +127,12 @@ async function handleTicketModal(interaction) {
   // ticket from disk. messageId is the V2 message we will edit later.
   ticketState.set(thread.id, { ...initialState, messageId: sentMessage.id });
 
+  // Ack the user NOW — overflow text, file re-uploads and the log embed are
+  // best-effort extras that shouldn't hold the confirmation hostage.
+  await interaction.editReply({
+    content: `✅ Your ticket has been created: ${thread}`,
+  });
+
   // If any answer had to be truncated to fit the V2 budget, post the full
   // text as plain follow-up messages so nothing is lost. Most tickets won't
   // hit this path — only paragraph dumps over ~1500 chars per field.
@@ -176,17 +182,13 @@ async function handleTicketModal(interaction) {
     }
   }
 
-  await logTicket(guild, {
+  logTicket(guild, {
     severity: 'info',
     title: `🆕 ${dep.label}`,
     description:
       `${interaction.user} opened ${thread}` +
       (uploadedFiles.length ? ` · 📎 ${uploadedFiles.length}` : ''),
-  });
-
-  await interaction.editReply({
-    content: `✅ Your ticket has been created: ${thread}`,
-  });
+  }).catch(() => {});
 }
 
 // ---- Claim / unclaim ----
@@ -249,11 +251,11 @@ async function handleClaim(interaction) {
       flags: MessageFlags.IsComponentsV2,
       allowedMentions: { parse: [] },
     });
-    await logTicket(interaction.guild, {
+    logTicket(interaction.guild, {
       severity: 'success',
       title: '👋 Ticket claimed',
       description: `${interaction.user} claimed ${interaction.channel}`,
-    });
+    }).catch(() => {});
     return;
   }
 
@@ -278,11 +280,11 @@ async function handleClaim(interaction) {
 
   const claimed = buildOpenControlPanel(interaction.user.id);
   await interaction.update({ components: [claimed], flags: MessageFlags.IsComponentsV2 });
-  await logTicket(interaction.guild, {
+  logTicket(interaction.guild, {
     severity: 'success',
     title: '👋 Ticket claimed',
     description: `${interaction.user} claimed ${interaction.channel}`,
-  });
+  }).catch(() => {});
 }
 
 // ---- Add user (button -> ephemeral user select) ----
@@ -356,11 +358,11 @@ async function handleAddUserSelect(interaction) {
     components: [],
   });
 
-  await logTicket(interaction.guild, {
+  logTicket(interaction.guild, {
     severity: 'info',
     title: '➕ User added to ticket',
     description: `${interaction.user} added ${target.user} to ${channel}`,
-  });
+  }).catch(() => {});
 }
 
 // ---- Close (confirm modal -> close logic) ----
@@ -481,53 +483,42 @@ async function handleCloseModal(interaction) {
     name: `transcript-${channel.name}.txt`,
   });
 
-  // Send transcript to log
-  const transcriptChannelId = guildConfig.getTicketConfig(guild.id).transcriptChannelId;
-  const transcriptChannel = transcriptChannelId
-    ? guild.channels.cache.get(transcriptChannelId)
-    : null;
-  if (transcriptChannel?.isTextBased()) {
-    await transcriptChannel.send({
-      content:
-        `📄 Transcript for \`${channel.name}\` · closed by ${interaction.user}` +
-        (reason ? `\n**Reason:** ${reason.slice(0, 1000)}` : ''),
-      files: [attachment],
-      allowedMentions: { parse: [] },
-    });
-  }
-
-  await logTicket(guild, {
-    severity: 'success',
-    title: '✅ Ticket closed',
-    description:
-      `${interaction.user} closed ${channel}` +
-      (reason ? `\n**Reason:** ${reason.slice(0, 500)}` : ''),
-  });
-
-  // ----- Update the in-thread ticket UI -----
+  // Update in-thread UI and deliver the transcript IN PARALLEL — they're
+  // independent REST calls — then ack. The log embed is fire-and-forget.
   const state = ticketState.get(channel.id);
-  if (state && state.messageId) {
-    // New format: edit the merged container in-place (no extra message in the thread)
-    const updatedState = {
-      ...state,
-      closed: true,
-      closedById: interaction.user.id,
-      closedReason: reason || undefined,
-      closedAt: Date.now(),
-    };
-    ticketState.set(channel.id, updatedState);
-    try {
-      const msg = await channel.messages.fetch(state.messageId);
-      await msg.edit({
-        components: [buildTicketContainer(updatedState)],
-        flags: MessageFlags.IsComponentsV2,
-        allowedMentions: { parse: [] },
-      });
-    } catch (err) {
-      console.error(
-        'Failed to edit ticket message on close, falling back to a separate closed panel:',
-        err,
-      );
+
+  const uiUpdate = (async () => {
+    if (state && state.messageId) {
+      // New format: edit the merged container in-place (no extra message)
+      const updatedState = {
+        ...state,
+        closed: true,
+        closedById: interaction.user.id,
+        closedReason: reason || undefined,
+        closedAt: Date.now(),
+      };
+      ticketState.set(channel.id, updatedState);
+      try {
+        const msg = await channel.messages.fetch(state.messageId);
+        await msg.edit({
+          components: [buildTicketContainer(updatedState)],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        });
+      } catch (err) {
+        console.error(
+          'Failed to edit ticket message on close, falling back to a separate closed panel:',
+          err,
+        );
+        const closedPanel = buildClosedControlPanel(interaction.user, reason);
+        await channel.send({
+          components: [closedPanel],
+          flags: MessageFlags.IsComponentsV2,
+          allowedMentions: { parse: [] },
+        });
+      }
+    } else {
+      // Legacy: send a separate closed-state panel
       const closedPanel = buildClosedControlPanel(interaction.user, reason);
       await channel.send({
         components: [closedPanel],
@@ -535,19 +526,41 @@ async function handleCloseModal(interaction) {
         allowedMentions: { parse: [] },
       });
     }
-  } else {
-    // Legacy: send a separate closed-state panel
-    const closedPanel = buildClosedControlPanel(interaction.user, reason);
-    await channel.send({
-      components: [closedPanel],
-      flags: MessageFlags.IsComponentsV2,
-      allowedMentions: { parse: [] },
-    });
-  }
+  })();
+
+  const transcriptDelivery = (async () => {
+    const transcriptChannelId = guildConfig.getTicketConfig(guild.id).transcriptChannelId;
+    const transcriptChannel = transcriptChannelId
+      ? guild.channels.cache.get(transcriptChannelId)
+      : null;
+    if (transcriptChannel?.isTextBased()) {
+      try {
+        await transcriptChannel.send({
+          content:
+            `📄 Transcript for \`${channel.name}\` · closed by ${interaction.user}` +
+            (reason ? `\n**Reason:** ${reason.slice(0, 1000)}` : ''),
+          files: [attachment],
+          allowedMentions: { parse: [] },
+        });
+      } catch (err) {
+        console.error('Failed to deliver transcript:', err);
+      }
+    }
+  })();
+
+  await Promise.all([uiUpdate, transcriptDelivery]);
 
   await interaction.editReply({
     content: '🔒 Ticket closed and transcript saved.',
   });
+
+  logTicket(guild, {
+    severity: 'success',
+    title: '✅ Ticket closed',
+    description:
+      `${interaction.user} closed ${channel}` +
+      (reason ? `\n**Reason:** ${reason.slice(0, 500)}` : ''),
+  }).catch(() => {});
 
   // Lock the thread so anyone still inside it (the opener, added users)
   // can't keep typing in a closed ticket. Lock blocks non-Manage-Threads
@@ -632,11 +645,11 @@ async function handleReopen(interaction) {
     await interaction.update({ components: [reopenedPanel], flags: MessageFlags.IsComponentsV2 });
   }
 
-  await logTicket(interaction.guild, {
+  logTicket(interaction.guild, {
     severity: 'warning',
     title: '🔓 Ticket reopened',
     description: `${interaction.user} reopened ${channel}`,
-  });
+  }).catch(() => {});
 }
 
 module.exports = {
