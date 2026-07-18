@@ -148,15 +148,15 @@ via the daily sweep, YouTube rows without avatars simply render without one.
 
 ## Config & env surface (new/changed)
 
-| Key | Where | Default | Meaning |
-| --- | --- | --- | --- |
-| `YOUTUBE_POLL_MS` | alerts.config.js | 60 000 | poll interval (was 120 000) |
-| `YOUTUBE_POLL_MS_WEBSUB` | alerts.config.js | 300 000 | fallback interval when WebSub active |
-| `TWITCH_AVATAR_REFRESH_MS` | alerts.config.js | 86 400 000 | daily avatar refresh |
-| `ALLOWED_GUILD_IDS` | .env | unset | comma-separated whitelist seed |
-| `WEBSUB_CALLBACK_URL` | .env | unset | public callback base URL (enables WebSub) |
-| `WEBSUB_PORT` | .env | 8080 | local HTTP listen port |
-| `WEBSUB_SECRET` | .env | unset | HMAC secret for notification verification |
+| Key                        | Where            | Default    | Meaning                                   |
+| -------------------------- | ---------------- | ---------- | ----------------------------------------- |
+| `YOUTUBE_POLL_MS`          | alerts.config.js | 60 000     | poll interval (was 120 000)               |
+| `YOUTUBE_POLL_MS_WEBSUB`   | alerts.config.js | 300 000    | fallback interval when WebSub active      |
+| `TWITCH_AVATAR_REFRESH_MS` | alerts.config.js | 86 400 000 | daily avatar refresh                      |
+| `ALLOWED_GUILD_IDS`        | .env             | unset      | comma-separated whitelist seed            |
+| `WEBSUB_CALLBACK_URL`      | .env             | unset      | public callback base URL (enables WebSub) |
+| `WEBSUB_PORT`              | .env             | 8080       | local HTTP listen port                    |
+| `WEBSUB_SECRET`            | .env             | unset      | HMAC secret for notification verification |
 
 ## Testing
 

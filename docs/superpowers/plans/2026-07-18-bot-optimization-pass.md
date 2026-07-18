@@ -11,6 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-07-18-bot-optimization-design.md`
 
 **Conventions that apply to every task:**
+
 - Run tests with `node --test` (all) or `node --test test/<file>.test.js` (one file).
 - Run `npx eslint .` and `npx prettier --write <changed files>` before each commit.
 - Alerts-system files (`systems/alerts/**`, `config/alerts.config.js`) use unicode escapes for emoji (e.g. `🔔`), other files use literal emoji — match whichever the file already does.
@@ -22,6 +23,7 @@
 ### Task 1: Whitelist env seed (`ALLOWED_GUILD_IDS`)
 
 **Files:**
+
 - Modify: `systems/whitelist.js` (add `parseSeedIds`, `seedFromEnv` to exports)
 - Modify: `index.js:9` (call `seedFromEnv()` after requiring whitelist)
 - Modify: `.env.example` (document the variable)
@@ -37,16 +39,14 @@ const assert = require('node:assert');
 const { parseSeedIds } = require('../systems/whitelist.js');
 
 test('parseSeedIds: splits on commas and whitespace, trims, dedupes', () => {
-  assert.deepStrictEqual(
-    parseSeedIds('123456789012345, 234567890123456 123456789012345'),
-    ['123456789012345', '234567890123456'],
-  );
+  assert.deepStrictEqual(parseSeedIds('123456789012345, 234567890123456 123456789012345'), [
+    '123456789012345',
+    '234567890123456',
+  ]);
 });
 
 test('parseSeedIds: drops non-snowflake garbage', () => {
-  assert.deepStrictEqual(parseSeedIds('abc, 12, 123456789012345678, <id>'), [
-    '123456789012345678',
-  ]);
+  assert.deepStrictEqual(parseSeedIds('abc, 12, 123456789012345678, <id>'), ['123456789012345678']);
 });
 
 test('parseSeedIds: empty/undefined input gives empty array', () => {
@@ -141,6 +141,7 @@ git commit -m "feat: seed guild whitelist from ALLOWED_GUILD_IDS env var"
 ### Task 2: DM approval flow for non-whitelisted guilds
 
 **Files:**
+
 - Create: `systems/guildApproval.js`
 - Modify: `index.js` (replace `guildCreate` handler; add `wl_` route; add ready-sweep)
 - Test: `test/guildApproval.test.js` (new)
@@ -458,10 +459,8 @@ const componentRoutes = [
 In the `ClientReady` handler, after the alerts init `try/catch`, add:
 
 ```js
-  // Sweep guilds that joined while the bot was offline (or missed a DM).
-  guildApproval
-    .sweepUnapproved(c)
-    .catch(err => console.error('⚠️ Whitelist sweep failed:', err));
+// Sweep guilds that joined while the bot was offline (or missed a DM).
+guildApproval.sweepUnapproved(c).catch(err => console.error('⚠️ Whitelist sweep failed:', err));
 ```
 
 - [ ] **Step 6: Full test run + lint, then commit**
@@ -479,6 +478,7 @@ git commit -m "feat: DM approval flow for non-whitelisted guild joins"
 ### Task 3: avatarUrl column + provider avatar lookups
 
 **Files:**
+
 - Modify: `systems/alerts/db.js` (new `ensureColumn` call)
 - Modify: `systems/alerts/queries.js` (insert gains avatarUrl; two new helpers)
 - Modify: `systems/alerts/providers/twitch.js` (`resolveUser` returns avatar; new `getUsersByIds`)
@@ -529,7 +529,12 @@ test('getUsersByIds batches and maps id -> user info', async () => {
     return fakeResponse({
       json: {
         data: [
-          { id: '1', login: 'a', display_name: 'A', profile_image_url: 'https://cdn.example/a.png' },
+          {
+            id: '1',
+            login: 'a',
+            display_name: 'A',
+            profile_image_url: 'https://cdn.example/a.png',
+          },
         ],
       },
     });
@@ -557,7 +562,10 @@ test('fetchChannelAvatar returns a thumbnail url, null without key or on error',
           items: [
             {
               snippet: {
-                thumbnails: { default: { url: 'https://yt.example/d.jpg' }, medium: { url: 'https://yt.example/m.jpg' } },
+                thumbnails: {
+                  default: { url: 'https://yt.example/d.jpg' },
+                  medium: { url: 'https://yt.example/m.jpg' },
+                },
               },
             },
           ],
@@ -584,12 +592,12 @@ Expected: FAIL — `avatarUrl` undefined, `getUsersByIds`/`fetchChannelAvatar` n
 `systems/alerts/providers/twitch.js` — change `resolveUser`'s return to:
 
 ```js
-  return {
-    id: u.id,
-    name: u.display_name || u.login,
-    login: u.login,
-    avatarUrl: u.profile_image_url || null,
-  };
+return {
+  id: u.id,
+  name: u.display_name || u.login,
+  login: u.login,
+  avatarUrl: u.profile_image_url || null,
+};
 ```
 
 Add below `getLiveStreams` (and export it):
@@ -698,7 +706,7 @@ function setAvatarForSource(provider, sourceId, url) {
 `systems/alerts/alerts.js`, YouTube branch — after `const label = resolved.label || channelId;` add:
 
 ```js
-    const avatarUrl = await yt.fetchChannelAvatar(channelId, youtubeApiKey);
+const avatarUrl = await yt.fetchChannelAvatar(channelId, youtubeApiKey);
 ```
 
 and add `avatarUrl,` to the `q.insertSubscription({...})` object (after `customTemplate: null,`).
@@ -720,6 +728,7 @@ git commit -m "feat: store source avatars for alert embeds (avatarUrl column)"
 ### Task 4: Alert embed builders (`systems/alerts/embeds.js`)
 
 **Files:**
+
 - Create: `systems/alerts/embeds.js`
 - Test: `test/embeds.test.js` (new)
 
@@ -859,7 +868,9 @@ function buildYoutubeEmbed({
     .setColor(cfg.COLORS.youtube[type] ?? cfg.COLORS.youtube.vod)
     .setAuthor({
       name: trunc(channelTitle || 'YouTube', 256),
-      url: channelId ? `https://www.youtube.com/channel/${encodeURIComponent(channelId)}` : undefined,
+      url: channelId
+        ? `https://www.youtube.com/channel/${encodeURIComponent(channelId)}`
+        : undefined,
       iconURL: avatarUrl || undefined,
     })
     .setTitle(trunc(title || 'New upload', 256))
@@ -867,11 +878,7 @@ function buildYoutubeEmbed({
     .setImage(`https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`)
     .setFooter({
       text:
-        type === 'live'
-          ? 'YouTube · Live now'
-          : type === 'shorts'
-            ? 'YouTube Shorts'
-            : 'YouTube',
+        type === 'live' ? 'YouTube · Live now' : type === 'shorts' ? 'YouTube Shorts' : 'YouTube',
     })
     .setTimestamp(publishedMs ? new Date(publishedMs) : new Date());
 
@@ -950,6 +957,7 @@ git commit -m "feat: pure embed builders for YouTube/Twitch alerts"
 ### Task 5: Conditional GET (ETag) support in the YouTube feed fetch
 
 **Files:**
+
 - Modify: `systems/alerts/providers/youtube.js` (`fetchRssTextWithRetry`, `fetchYoutubeFeed`, `classifyVideo` return gains `durationSec`)
 - Test: `test/youtube.test.js` (extend)
 
@@ -1151,6 +1159,7 @@ async function fetchYoutubeFeed(channelId, cacheEntry = null) {
 - [ ] **Step 4: Add `durationSec` to `classifyVideo` returns**
 
 In `classifyVideo`, change every return that has a computed duration to include it:
+
 - `if (liveBroadcastContent === 'upcoming') return { type: 'upcoming', title };` → unchanged (no duration relevance)
 - `if (isLiveNow) return { type: 'live', title };` → unchanged
 - `return { type: 'vod', title };` (the `> SHORTS_MAX_DURATION` branch) → `return { type: 'vod', title, durationSec };`
@@ -1175,6 +1184,7 @@ git commit -m "feat: conditional-GET feed fetch and durationSec classification"
 ### Task 6: Shared YouTube pipeline + channel-deduped poller
 
 **Files:**
+
 - Create: `systems/alerts/youtubePipeline.js`
 - Modify: `systems/alerts/poller.js` (delete `processYoutubeSub`; group by channel; export `postAlert`)
 - Modify: `config/alerts.config.js` (`YOUTUBE_POLL_MS` 60s, add `YOUTUBE_POLL_MS_WEBSUB`)
@@ -1187,7 +1197,10 @@ Create `test/youtubePipeline.test.js`:
 ```js
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { processYoutubeChannel, _clearFeedCacheForTests } = require('../systems/alerts/youtubePipeline.js');
+const {
+  processYoutubeChannel,
+  _clearFeedCacheForTests,
+} = require('../systems/alerts/youtubePipeline.js');
 
 function makeSub(over = {}) {
   return {
@@ -1598,6 +1611,7 @@ git commit -m "feat: channel-deduped YouTube polling via shared pipeline, 60s in
 ### Task 7: Twitch hardening (429 retry, daily avatar refresh, new embed)
 
 **Files:**
+
 - Modify: `systems/alerts/providers/twitch.js` (`twitchApiGet` 429 handling)
 - Modify: `systems/alerts/poller.js` (`pollTwitch` uses `buildTwitchEmbed`; avatar refresh timer)
 - Modify: `config/alerts.config.js` (`TWITCH_AVATAR_REFRESH_MS`)
@@ -1620,7 +1634,12 @@ test('twitchApiGet retries once on 429 honoring ratelimit-reset', async () => {
       return {
         status: 429,
         ok: false,
-        headers: { get: n => (String(n).toLowerCase() === 'ratelimit-reset' ? String(Math.ceil(Date.now() / 1000)) : null) },
+        headers: {
+          get: n =>
+            String(n).toLowerCase() === 'ratelimit-reset'
+              ? String(Math.ceil(Date.now() / 1000))
+              : null,
+        },
         async json() {
           return {};
         },
@@ -1688,12 +1707,12 @@ const { buildTwitchEmbed } = require('./embeds.js');
 In `pollTwitch`, replace the embed construction block — everything from `const embed = new EmbedBuilder()` through the `viewer_count` `addFields` block (poller.js lines 247–278 pre-task) — with:
 
 ```js
-        const embed = buildTwitchEmbed({
-          login: loginSlug,
-          displayName: sub.sourceLabel,
-          avatarUrl: sub.avatarUrl,
-          stream,
-        });
+const embed = buildTwitchEmbed({
+  login: loginSlug,
+  displayName: sub.sourceLabel,
+  avatarUrl: sub.avatarUrl,
+  stream,
+});
 ```
 
 (The `loginSlug`, `url`, `template`, and `text` lines above it stay. Delete the now-unused `EmbedBuilder` import from poller.js.)
@@ -1731,9 +1750,12 @@ let avatarTimer = null;
 (top of file, next to the other timer lets), and inside `startPollers`:
 
 ```js
-  if (avatarTimer) clearInterval(avatarTimer);
-  avatarTimer = setInterval(() => refreshTwitchAvatars().catch(() => {}), cfg.TWITCH_AVATAR_REFRESH_MS);
-  refreshTwitchAvatars().catch(() => {});
+if (avatarTimer) clearInterval(avatarTimer);
+avatarTimer = setInterval(
+  () => refreshTwitchAvatars().catch(() => {}),
+  cfg.TWITCH_AVATAR_REFRESH_MS,
+);
+refreshTwitchAvatars().catch(() => {});
 ```
 
 - [ ] **Step 6: Add config value**
@@ -1757,6 +1779,7 @@ git commit -m "feat: twitch 429 retry, richer live embed, daily avatar refresh"
 ### Task 8: WebSub push endpoint (opt-in)
 
 **Files:**
+
 - Create: `systems/alerts/websub.js`
 - Modify: `systems/alerts/alerts.js` (init + subscribe on add / unsubscribe on remove)
 - Modify: `systems/alerts/poller.js` (`startPollers` picks the WebSub fallback interval)
@@ -1959,7 +1982,8 @@ function _createServerForTests({ secret, onNotification }) {
       let size = 0;
       req.on('data', c => {
         size += c.length;
-        if (size > 1024 * 1024) req.destroy(); // 1 MB cap — real pushes are tiny
+        if (size > 1024 * 1024)
+          req.destroy(); // 1 MB cap — real pushes are tiny
         else chunks.push(c);
       });
       req.on('end', () => {
@@ -2120,28 +2144,29 @@ Expected: PASS (5 tests)
 `systems/alerts/poller.js` — in `startPollers`, pick the interval based on push mode. Add `const websub = require('./websub.js');` at the top, then:
 
 ```js
-  const youtubePollMs = websub.isEnabled() ? cfg.YOUTUBE_POLL_MS_WEBSUB : cfg.YOUTUBE_POLL_MS;
-  youtubeTimer = setInterval(() => pollYoutube().catch(() => {}), youtubePollMs);
+const youtubePollMs = websub.isEnabled() ? cfg.YOUTUBE_POLL_MS_WEBSUB : cfg.YOUTUBE_POLL_MS;
+youtubeTimer = setInterval(() => pollYoutube().catch(() => {}), youtubePollMs);
 ```
 
 `systems/alerts/alerts.js`:
+
 - Add `const websub = require('./websub.js');` near the other requires.
 - In `initAlertsSystem`, after `poller.startPollers();` add:
 
 ```js
-  websub.init(poller.postAlert); // no-op unless WEBSUB_CALLBACK_URL is set
+websub.init(poller.postAlert); // no-op unless WEBSUB_CALLBACK_URL is set
 ```
 
 - In `alertsAdd`'s YouTube branch, right after `q.insertSubscription({...})`, add:
 
 ```js
-    websub.subscribeChannel(channelId);
+websub.subscribeChannel(channelId);
 ```
 
 - In `alertsRemove`, after `q.deleteSubscription(id, interaction.guildId);` add:
 
 ```js
-  if (row.provider === 'youtube') websub.unsubscribeChannel(row.sourceId);
+if (row.provider === 'youtube') websub.unsubscribeChannel(row.sourceId);
 ```
 
 `.env.example` — append a new section:
@@ -2174,6 +2199,7 @@ git commit -m "feat: opt-in YouTube WebSub push endpoint with lease renewal"
 No new unit tests (all Discord-coupled); verification is `npx eslint .`, the full existing suite, and module load checks. Behavioural rule for every edit: the user-visible ack (`reply`/`editReply`/`update`/`showModal`) moves as early as possible; best-effort logging and panel refreshes become un-awaited with `.catch()`.
 
 **Files:**
+
 - Modify: `index.js` (client cache tuning)
 - Modify: `systems/tickets/handlers.js`
 - Modify: `systems/verify.js`
@@ -2184,7 +2210,14 @@ No new unit tests (all Discord-coupled); verification is `npx eslint .`, the ful
 Change the discord.js import to include `Options`:
 
 ```js
-const { Client, Collection, GatewayIntentBits, Events, MessageFlags, Options } = require('discord.js');
+const {
+  Client,
+  Collection,
+  GatewayIntentBits,
+  Events,
+  MessageFlags,
+  Options,
+} = require('discord.js');
 ```
 
 Change the client construction to:
@@ -2247,42 +2280,33 @@ c) `handleAddUserSelect`: the trailing `await logTicket(...)` becomes `logTicket
 d) `handleCloseModal`: parallelize the UI edit and transcript send, ack, then log. Replace everything from `// Send transcript to log` down to (and including) the `await interaction.editReply({ content: '🔒 Ticket closed and transcript saved.' });` with:
 
 ```js
-  // Update in-thread UI and deliver the transcript IN PARALLEL — they're
-  // independent REST calls — then ack. The log embed is fire-and-forget.
-  const state = ticketState.get(channel.id);
+// Update in-thread UI and deliver the transcript IN PARALLEL — they're
+// independent REST calls — then ack. The log embed is fire-and-forget.
+const state = ticketState.get(channel.id);
 
-  const uiUpdate = (async () => {
-    if (state && state.messageId) {
-      // New format: edit the merged container in-place (no extra message)
-      const updatedState = {
-        ...state,
-        closed: true,
-        closedById: interaction.user.id,
-        closedReason: reason || undefined,
-        closedAt: Date.now(),
-      };
-      ticketState.set(channel.id, updatedState);
-      try {
-        const msg = await channel.messages.fetch(state.messageId);
-        await msg.edit({
-          components: [buildTicketContainer(updatedState)],
-          flags: MessageFlags.IsComponentsV2,
-          allowedMentions: { parse: [] },
-        });
-      } catch (err) {
-        console.error(
-          'Failed to edit ticket message on close, falling back to a separate closed panel:',
-          err,
-        );
-        const closedPanel = buildClosedControlPanel(interaction.user, reason);
-        await channel.send({
-          components: [closedPanel],
-          flags: MessageFlags.IsComponentsV2,
-          allowedMentions: { parse: [] },
-        });
-      }
-    } else {
-      // Legacy: send a separate closed-state panel
+const uiUpdate = (async () => {
+  if (state && state.messageId) {
+    // New format: edit the merged container in-place (no extra message)
+    const updatedState = {
+      ...state,
+      closed: true,
+      closedById: interaction.user.id,
+      closedReason: reason || undefined,
+      closedAt: Date.now(),
+    };
+    ticketState.set(channel.id, updatedState);
+    try {
+      const msg = await channel.messages.fetch(state.messageId);
+      await msg.edit({
+        components: [buildTicketContainer(updatedState)],
+        flags: MessageFlags.IsComponentsV2,
+        allowedMentions: { parse: [] },
+      });
+    } catch (err) {
+      console.error(
+        'Failed to edit ticket message on close, falling back to a separate closed panel:',
+        err,
+      );
       const closedPanel = buildClosedControlPanel(interaction.user, reason);
       await channel.send({
         components: [closedPanel],
@@ -2290,41 +2314,50 @@ d) `handleCloseModal`: parallelize the UI edit and transcript send, ack, then lo
         allowedMentions: { parse: [] },
       });
     }
-  })();
+  } else {
+    // Legacy: send a separate closed-state panel
+    const closedPanel = buildClosedControlPanel(interaction.user, reason);
+    await channel.send({
+      components: [closedPanel],
+      flags: MessageFlags.IsComponentsV2,
+      allowedMentions: { parse: [] },
+    });
+  }
+})();
 
-  const transcriptDelivery = (async () => {
-    const transcriptChannelId = guildConfig.getTicketConfig(guild.id).transcriptChannelId;
-    const transcriptChannel = transcriptChannelId
-      ? guild.channels.cache.get(transcriptChannelId)
-      : null;
-    if (transcriptChannel?.isTextBased()) {
-      try {
-        await transcriptChannel.send({
-          content:
-            `📄 Transcript for \`${channel.name}\` · closed by ${interaction.user}` +
-            (reason ? `\n**Reason:** ${reason.slice(0, 1000)}` : ''),
-          files: [attachment],
-          allowedMentions: { parse: [] },
-        });
-      } catch (err) {
-        console.error('Failed to deliver transcript:', err);
-      }
+const transcriptDelivery = (async () => {
+  const transcriptChannelId = guildConfig.getTicketConfig(guild.id).transcriptChannelId;
+  const transcriptChannel = transcriptChannelId
+    ? guild.channels.cache.get(transcriptChannelId)
+    : null;
+  if (transcriptChannel?.isTextBased()) {
+    try {
+      await transcriptChannel.send({
+        content:
+          `📄 Transcript for \`${channel.name}\` · closed by ${interaction.user}` +
+          (reason ? `\n**Reason:** ${reason.slice(0, 1000)}` : ''),
+        files: [attachment],
+        allowedMentions: { parse: [] },
+      });
+    } catch (err) {
+      console.error('Failed to deliver transcript:', err);
     }
-  })();
+  }
+})();
 
-  await Promise.all([uiUpdate, transcriptDelivery]);
+await Promise.all([uiUpdate, transcriptDelivery]);
 
-  await interaction.editReply({
-    content: '🔒 Ticket closed and transcript saved.',
-  });
+await interaction.editReply({
+  content: '🔒 Ticket closed and transcript saved.',
+});
 
-  logTicket(guild, {
-    severity: 'success',
-    title: '✅ Ticket closed',
-    description:
-      `${interaction.user} closed ${channel}` +
-      (reason ? `\n**Reason:** ${reason.slice(0, 500)}` : ''),
-  }).catch(() => {});
+logTicket(guild, {
+  severity: 'success',
+  title: '✅ Ticket closed',
+  description:
+    `${interaction.user} closed ${channel}` +
+    (reason ? `\n**Reason:** ${reason.slice(0, 500)}` : ''),
+}).catch(() => {});
 ```
 
 (The old duplicated `state`/UI-edit block that used to live BELOW the transcript send must be deleted — it is now inside `uiUpdate`. The lock + delayed archive block after `editReply` stays unchanged.)
@@ -2342,23 +2375,23 @@ c) `runPreChecks` account-too-new block: change `await logVerify(...)` to `logVe
 d) `handleVerifyButton` word-challenge branch: show the modal FIRST (it's the interaction ack and must beat the 3s window), then log:
 
 ```js
-  if (fastClicker && staticConfig.SECURITY.WORD_CHALLENGE.ENABLED) {
-    const word = pickChallengeWord();
-    await interaction.showModal(buildWordChallengeModal(word));
-    if (staticConfig.SECURITY.LOG_FAILS) {
-      logVerify(guild, {
-        severity: 'info',
-        title: '⏱ Word challenge issued',
-        fields: [
-          userField(interaction.user),
-          { name: 'Joined', value: `${formatDuration(inServerMs)} ago`, inline: true },
-          { name: 'Threshold', value: formatDuration(minJoinAge), inline: true },
-          { name: 'Word', value: `\`${word}\``, inline: true },
-        ],
-      }).catch(() => {});
-    }
-    return;
+if (fastClicker && staticConfig.SECURITY.WORD_CHALLENGE.ENABLED) {
+  const word = pickChallengeWord();
+  await interaction.showModal(buildWordChallengeModal(word));
+  if (staticConfig.SECURITY.LOG_FAILS) {
+    logVerify(guild, {
+      severity: 'info',
+      title: '⏱ Word challenge issued',
+      fields: [
+        userField(interaction.user),
+        { name: 'Joined', value: `${formatDuration(inServerMs)} ago`, inline: true },
+        { name: 'Threshold', value: formatDuration(minJoinAge), inline: true },
+        { name: 'Word', value: `\`${word}\``, inline: true },
+      ],
+    }).catch(() => {});
   }
+  return;
+}
 ```
 
 e) `handleVerifyWordModal` fail branch: reply first, then `logVerify(...).catch(() => {});`.
@@ -2370,41 +2403,40 @@ f) `grantVerifiedRole`: the trailing `await logVerify(...)` becomes `logVerify(.
 a) `vc_privacy_cycle` branch: defer before the permission rewrites, editReply after, panel refresh un-awaited:
 
 ```js
-  if (action === 'vc_privacy_cycle') {
-    const current = meta.privacy || 'public';
-    const next = nextPrivacy(current);
+if (action === 'vc_privacy_cycle') {
+  const current = meta.privacy || 'public';
+  const next = nextPrivacy(current);
 
-    // Privacy = several permission-overwrite REST calls; defer so a slow batch
-    // can't blow the 3s ack window.
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    try {
-      await applyPrivacy(voiceChannel, guild, meta, next);
-    } catch (err) {
-      console.error('Failed to apply privacy mode:', err);
-      return interaction.editReply({
-        content: '⚠️ Failed to update privacy. Check bot permissions and try again.',
-      });
-    }
-
-    if (interaction.user.id === meta.ownerId && vcPrefs.isProfileEnabled(guild.id, meta.ownerId)) {
-      vcPrefs.patchProfile(guild.id, meta.ownerId, { privacy: next });
-    }
-
-    const replyByMode = {
-      public: '🔓 VC is now **Public**. Anyone with category access can join.',
-      friends:
-        '🤝 VC is now **Friends-only**. Owner, co-owners, and your friends list can join.',
-      private: '🔒 VC is now **Private**. Only the owner and co-owners can join.',
-    };
-    await interaction.editReply({ content: replyByMode[next] });
-
-    if (typeof voiceChannel.send === 'function') {
-      sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
-        console.error('Failed to refresh VC panel:', err),
-      );
-    }
-    return;
+  // Privacy = several permission-overwrite REST calls; defer so a slow batch
+  // can't blow the 3s ack window.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    await applyPrivacy(voiceChannel, guild, meta, next);
+  } catch (err) {
+    console.error('Failed to apply privacy mode:', err);
+    return interaction.editReply({
+      content: '⚠️ Failed to update privacy. Check bot permissions and try again.',
+    });
   }
+
+  if (interaction.user.id === meta.ownerId && vcPrefs.isProfileEnabled(guild.id, meta.ownerId)) {
+    vcPrefs.patchProfile(guild.id, meta.ownerId, { privacy: next });
+  }
+
+  const replyByMode = {
+    public: '🔓 VC is now **Public**. Anyone with category access can join.',
+    friends: '🤝 VC is now **Friends-only**. Owner, co-owners, and your friends list can join.',
+    private: '🔒 VC is now **Private**. Only the owner and co-owners can join.',
+  };
+  await interaction.editReply({ content: replyByMode[next] });
+
+  if (typeof voiceChannel.send === 'function') {
+    sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+      console.error('Failed to refresh VC panel:', err),
+    );
+  }
+  return;
+}
 ```
 
 b) `vc_autosave_toggle` branch: keep as-is except the trailing panel refresh becomes un-awaited (`sendVcPanel(...).catch(err => console.error('Failed to refresh VC panel:', err));`).
@@ -2414,43 +2446,43 @@ c) `vc_delete` branch: change `await logVcEvent(...)` to `logVcEvent(...).catch(
 d) `vc_refresh` branch: reply first, refresh after:
 
 ```js
-  if (action === 'vc_refresh') {
-    await interaction.reply({
-      content: '🔄 VC panel refreshed.',
-      flags: MessageFlags.Ephemeral,
-    });
-    if (typeof voiceChannel.send === 'function') {
-      sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
-        console.error('Failed to refresh VC panel:', err),
-      );
-    }
-    return;
+if (action === 'vc_refresh') {
+  await interaction.reply({
+    content: '🔄 VC panel refreshed.',
+    flags: MessageFlags.Ephemeral,
+  });
+  if (typeof voiceChannel.send === 'function') {
+    sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+      console.error('Failed to refresh VC panel:', err),
+    );
   }
+  return;
+}
 ```
 
 e) `handleVcModal` rename branch: channel renames are rate-limited to 2/10min by Discord — a queued rename can hang far past the 3s ack window, so defer first:
 
 ```js
-  if (isRename) {
-    const newName = interaction.fields.getTextInputValue('vc_new_name');
-    // Channel renames are rate-limited (2/10min); a queued rename can take
-    // minutes. Defer keeps the token alive for up to 15 minutes.
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    await voiceChannel.setName(newName);
+if (isRename) {
+  const newName = interaction.fields.getTextInputValue('vc_new_name');
+  // Channel renames are rate-limited (2/10min); a queued rename can take
+  // minutes. Defer keeps the token alive for up to 15 minutes.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  await voiceChannel.setName(newName);
 
-    if (interaction.user.id === meta.ownerId && vcPrefs.isProfileEnabled(guild.id, meta.ownerId)) {
-      vcPrefs.patchProfile(guild.id, meta.ownerId, { name: newName });
-    }
-
-    await interaction.editReply({ content: `✅ VC renamed to **${newName}**.` });
-
-    if (typeof voiceChannel.send === 'function') {
-      sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
-        console.error('Failed to refresh VC panel:', err),
-      );
-    }
-    return;
+  if (interaction.user.id === meta.ownerId && vcPrefs.isProfileEnabled(guild.id, meta.ownerId)) {
+    vcPrefs.patchProfile(guild.id, meta.ownerId, { name: newName });
   }
+
+  await interaction.editReply({ content: `✅ VC renamed to **${newName}**.` });
+
+  if (typeof voiceChannel.send === 'function') {
+    sendVcPanel(voiceChannel, voiceChannel, guild).catch(err =>
+      console.error('Failed to refresh VC panel:', err),
+    );
+  }
+  return;
+}
 ```
 
 f) `handleVcModal` limit branch: keep validation reply as a plain reply (no REST work before it), but make the trailing panel refresh un-awaited as in (b).
@@ -2477,6 +2509,7 @@ git commit -m "perf: reply-first interaction handling, defer REST-heavy paths, t
 ### Task 10: Embed polish for `/alerts list`, `/config`, template preview
 
 **Files:**
+
 - Modify: `systems/alerts/alerts.js` (`alertsList`, `alertsTemplatePreview`)
 - Modify: `commands/config.js` (`show` + `quick-setup` embed colors)
 
@@ -2485,33 +2518,33 @@ git commit -m "perf: reply-first interaction handling, defer REST-heavy paths, t
 Replace the embed construction in `alertsList` (from `const embed = new EmbedBuilder()` through the `for (const r of rows.slice(0, 20))` loop) with:
 
 ```js
-  const PROVIDER_EMOJI = { youtube: '📺', twitch: '🟣' };
+const PROVIDER_EMOJI = { youtube: '📺', twitch: '🟣' };
 
-  const embed = new EmbedBuilder()
-    .setTitle('🔔 Alert subscriptions')
-    .setColor(0x57f287)
-    .setDescription(
-      `**${rows.length}** subscription${rows.length === 1 ? '' : 's'} configured for this server.\n` +
-        '-# `/alerts remove id:<id>` · `/alerts roles id:<id>` · `/alerts template id:<id>`',
-    )
-    .setTimestamp();
+const embed = new EmbedBuilder()
+  .setTitle('🔔 Alert subscriptions')
+  .setColor(0x57f287)
+  .setDescription(
+    `**${rows.length}** subscription${rows.length === 1 ? '' : 's'} configured for this server.\n` +
+      '-# `/alerts remove id:<id>` · `/alerts roles id:<id>` · `/alerts template id:<id>`',
+  )
+  .setTimestamp();
 
-  for (const r of rows.slice(0, 20)) {
-    const types = safeJsonParse(r.types, []).map(displayType);
-    const roles = safeJsonParse(r.mentionRoleIds, []);
+for (const r of rows.slice(0, 20)) {
+  const types = safeJsonParse(r.types, []).map(displayType);
+  const roles = safeJsonParse(r.mentionRoleIds, []);
 
-    embed.addFields({
-      name: `${PROVIDER_EMOJI[r.provider] ?? '🔔'} ${r.sourceLabel}${r.enabled ? '' : ' · ⛔ disabled'}`,
-      value:
-        `**Types:** ${types.length ? types.join(' · ') : 'none'} → <#${r.discordChannelId}>\n` +
-        `**Roles:** ${roles.length ? roles.map(id => `<@&${id}>`).join(' ') : '_none_'}\n` +
-        `**ID:** \`${r.id}\``,
-    });
-  }
+  embed.addFields({
+    name: `${PROVIDER_EMOJI[r.provider] ?? '🔔'} ${r.sourceLabel}${r.enabled ? '' : ' · ⛔ disabled'}`,
+    value:
+      `**Types:** ${types.length ? types.join(' · ') : 'none'} → <#${r.discordChannelId}>\n` +
+      `**Roles:** ${roles.length ? roles.map(id => `<@&${id}>`).join(' ') : '_none_'}\n` +
+      `**ID:** \`${r.id}\``,
+  });
+}
 
-  if (rows.length > 20) {
-    embed.setFooter({ text: `Showing 20 of ${rows.length} — remove some to see the rest` });
-  }
+if (rows.length > 20) {
+  embed.setFooter({ text: `Showing 20 of ${rows.length} — remove some to see the rest` });
+}
 ```
 
 - [ ] **Step 2: Polish `alertsTemplatePreview`**
@@ -2519,17 +2552,17 @@ Replace the embed construction in `alertsList` (from `const embed = new EmbedBui
 In the preview embed, add a provider-colored accent. Replace `.setTitle('🔎 Template preview')` + `.setTimestamp()` chain start with:
 
 ```js
-  const embed = new EmbedBuilder()
-    .setTitle('🔎 Template preview')
-    .setColor(provider === 'twitch' ? 0x9146ff : 0xff0000)
-    .setDescription(
-      `**Subscription:** \`${row.id}\`\n` +
-        `**Provider:** ${provider}\n` +
-        `**Using:** ${hasCustom ? '✏️ custom template' : '📦 default template'}\n\n` +
-        '**Preview:**\n' +
-        previewText,
-    )
-    .setTimestamp();
+const embed = new EmbedBuilder()
+  .setTitle('🔎 Template preview')
+  .setColor(provider === 'twitch' ? 0x9146ff : 0xff0000)
+  .setDescription(
+    `**Subscription:** \`${row.id}\`\n` +
+      `**Provider:** ${provider}\n` +
+      `**Using:** ${hasCustom ? '✏️ custom template' : '📦 default template'}\n\n` +
+      '**Preview:**\n' +
+      previewText,
+  )
+  .setTimestamp();
 ```
 
 - [ ] **Step 3: Status-colored `/config` embeds**
@@ -2537,17 +2570,17 @@ In the preview embed, add a provider-colored accent. Replace `.setTitle('🔎 Te
 In `commands/config.js`, `show` branch: after `const problems = guildConfig.getConfigStatus(guildId);` change the embed to include a status color:
 
 ```js
-      const embed = new EmbedBuilder()
-        .setTitle('🛠 Server Configuration')
-        .setColor(problems.length ? 0xfee75c : 0x57f287)
+const embed = new EmbedBuilder()
+  .setTitle('🛠 Server Configuration')
+  .setColor(problems.length ? 0xfee75c : 0x57f287);
 ```
 
 (the rest of the chain unchanged). Same in the `quick-setup` branch:
 
 ```js
-      const embed = new EmbedBuilder()
-        .setTitle('✅ Quick Setup Complete')
-        .setColor(problems.length ? 0xfee75c : 0x57f287)
+const embed = new EmbedBuilder()
+  .setTitle('✅ Quick Setup Complete')
+  .setColor(problems.length ? 0xfee75c : 0x57f287);
 ```
 
 Note: in `quick-setup`, `problems` is computed AFTER the current embed construction — move the `const problems = guildConfig.getConfigStatus(guildId);` line to just BEFORE the `const embed = ...` so the color can use it (the later `if (problems.length)` block keeps working).
@@ -2567,6 +2600,7 @@ git commit -m "style: richer alerts list, template preview, and config embeds"
 ### Task 11: Docs, formatting sweep, final verification
 
 **Files:**
+
 - Modify: `docs/systems/alerts.md`, `docs/systems/config-and-whitelist.md`, `docs/setup.md`, `docs/overview.md`
 - Modify: `README.md` (only if it repeats poll intervals / whitelist flow — check first)
 

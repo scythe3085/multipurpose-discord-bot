@@ -182,8 +182,9 @@ The SQLite DB lives at `data/alerts.sqlite` (WAL mode), created automatically ([
 | `createdBy`, `createdAt` | Author + epoch ms (gates the "no back-fill" rule).                     |
 | `customTemplate`         | Custom message template, or NULL for default.                          |
 | `lastLiveAlertAt`        | Epoch ms of the last Twitch go-live alert (arms the re-live cooldown). |
+| `avatarUrl`              | Channel/streamer avatar for the embed author icon (NULL = no icon).    |
 
-`customTemplate`, `sourceLogin`, and `lastLiveAlertAt` are added by idempotent column migrations at startup, so an older DB upgrades in place.
+`customTemplate`, `sourceLogin`, `lastLiveAlertAt`, and `avatarUrl` are added by idempotent column migrations at startup, so an older DB upgrades in place.
 
 **`seen_items`** — the dedup ledger, primary key `(subscriptionId, itemId)` where `itemId` is a YouTube `videoId` or a Twitch `streamId`. `markSeen` is an atomic `INSERT OR IGNORE`; because better-sqlite3 is synchronous, claiming an item before posting makes a duplicate alert impossible even if two cycles race. Rows older than `SEEN_RETENTION_DAYS` (90, far longer than any feed lookback) are pruned daily, so re-alerting an old item is impossible. Deleting a subscription also deletes its `seen_items`.
 
