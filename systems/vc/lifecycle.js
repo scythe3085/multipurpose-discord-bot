@@ -139,35 +139,25 @@ async function handleJoinToCreate(newState) {
       ? profile.name.trim().slice(0, 100)
       : `\uD83D\uDD0A ${member.displayName}'s VC`;
 
-  // 1) Create the VC with NO overwrites so it inherits the category perms
-  const vc = await guild.channels.create({
+  // 1) Create the VC with NO overwrites so it inherits the category perms.
+  // The saved user limit rides along in the same API call instead of costing
+  // a follow-up edit.
+  const createOptions = {
     name: initialName,
     type: ChannelType.GuildVoice,
     parent: vcCfg.vcCategoryId || null,
-  });
-
-  // 2) Ensure the BOT can manage the channel (important if category is restrictive)
-  try {
-    const me = guild.members.me || (await guild.members.fetchMe());
-    await vc.permissionOverwrites.edit(me.id, {
-      ManageChannels: true,
-      ViewChannel: true,
-    });
-  } catch (err) {
-    console.error('Failed to apply bot overwrite on VC create:', err);
+  };
+  if (
+    useProfile &&
+    Number.isInteger(profile.userLimit) &&
+    profile.userLimit >= 0 &&
+    profile.userLimit <= 99
+  ) {
+    createOptions.userLimit = profile.userLimit;
   }
+  const vc = await guild.channels.create(createOptions);
 
-  // 3) Apply ONLY the owner's special perms AFTER creation (still keeps category inheritance for everyone else)
-  try {
-    await vc.permissionOverwrites.edit(member.id, {
-      Connect: true,
-      ViewChannel: true,
-      ManageChannels: true,
-    });
-  } catch (err) {
-    console.error('Failed to apply owner overwrite on VC create:', err);
-  }
-
+  // Track BEFORE the move so an instant leave still triggers empty-cleanup.
   tempVoiceChannels.set(vc.id, {
     ownerId: member.id,
     coOwners: new Set(),
@@ -176,59 +166,89 @@ async function handleJoinToCreate(newState) {
     privacy: 'public',
   });
 
-  // Apply any persistent VC blocklist for this owner on this guild
-  try {
-    const blockedIds = vcPrefs.getBlockedUsers(guild.id, member.id);
-    if (Array.isArray(blockedIds) && blockedIds.length) {
-      const meta = tempVoiceChannels.get(vc.id);
-      for (const blockedId of blockedIds) {
-        meta.banned.add(blockedId);
-        await vc.permissionOverwrites
-          .edit(blockedId, { Connect: false, ViewChannel: true })
-          .catch(() => {});
-      }
-      tempVoiceChannels.set(vc.id, meta);
-    }
-  } catch (err) {
-    console.error('Failed to apply VC blocklist on creation:', err);
-  }
-
-  // Apply saved profile (user limit, privacy mode) if Auto-save is on for this owner.
-  if (useProfile) {
-    if (Number.isInteger(profile.userLimit) && profile.userLimit >= 0 && profile.userLimit <= 99) {
-      try {
-        await vc.setUserLimit(profile.userLimit);
-      } catch (err) {
-        console.error('Failed to apply saved user limit on VC create:', err);
-      }
-    }
-    if (profile.privacy && profile.privacy !== 'public') {
-      try {
-        const meta = tempVoiceChannels.get(vc.id);
-        await applyPrivacy(vc, guild, meta, profile.privacy);
-      } catch (err) {
-        console.error('Failed to apply saved privacy state on VC create:', err);
-      }
-    }
-  }
-
-  // Move user into their new VC
+  // 2) Move the user in IMMEDIATELY \u2014 this is the only step they can feel.
+  // The move needs nothing but the channel to exist; overwrites, privacy and
+  // the panel are applied around them once they're already inside.
   try {
     await member.voice.setChannel(vc);
   } catch (err) {
     console.error('Failed to move member into new VC:', err);
   }
 
-  // Send the control panel into the voice channel\u2019s own text chat
-  if (typeof vc.send === 'function') {
+  // 3) Bot + owner + blocklist overwrites target DIFFERENT users, so their
+  // REST calls are independent \u2014 run them in parallel instead of serially.
+  const overwriteWork = [];
+
+  // Ensure the BOT can manage the channel (important if category is restrictive)
+  overwriteWork.push(
+    (async () => {
+      try {
+        const me = guild.members.me || (await guild.members.fetchMe());
+        await vc.permissionOverwrites.edit(me.id, {
+          ManageChannels: true,
+          ViewChannel: true,
+        });
+      } catch (err) {
+        console.error('Failed to apply bot overwrite on VC create:', err);
+      }
+    })(),
+  );
+
+  // Owner's special perms (still keeps category inheritance for everyone else)
+  overwriteWork.push(
+    vc.permissionOverwrites
+      .edit(member.id, {
+        Connect: true,
+        ViewChannel: true,
+        ManageChannels: true,
+      })
+      .catch(err => console.error('Failed to apply owner overwrite on VC create:', err)),
+  );
+
+  // Apply any persistent VC blocklist for this owner on this guild
+  try {
+    const blockedIds = vcPrefs.getBlockedUsers(guild.id, member.id);
+    if (Array.isArray(blockedIds) && blockedIds.length) {
+      const meta = tempVoiceChannels.get(vc.id);
+      if (meta) {
+        for (const blockedId of blockedIds) {
+          meta.banned.add(blockedId);
+          overwriteWork.push(
+            vc.permissionOverwrites
+              .edit(blockedId, { Connect: false, ViewChannel: true })
+              .catch(() => {}),
+          );
+        }
+        tempVoiceChannels.set(vc.id, meta);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to apply VC blocklist on creation:', err);
+  }
+
+  await Promise.all(overwriteWork);
+
+  // Saved privacy mode goes last \u2014 applyPrivacy edits the same owner and
+  // @everyone overwrites the calls above touch, so it must not race them.
+  if (useProfile && profile.privacy && profile.privacy !== 'public') {
     try {
-      await sendVcPanel(vc, vc, guild);
+      const meta = tempVoiceChannels.get(vc.id);
+      if (meta) await applyPrivacy(vc, guild, meta, profile.privacy);
     } catch (err) {
-      console.error('Failed to send VC panel into voice text chat:', err);
+      console.error('Failed to apply saved privacy state on VC create:', err);
     }
   }
 
-  await logVcEvent(guild, `\uD83C\uDD95 VC created: **${vc.name}** by **${member.user.tag}**`);
+  // Control panel + log are best-effort extras \u2014 never hold anything on them.
+  if (typeof vc.send === 'function') {
+    sendVcPanel(vc, vc, guild).catch(err =>
+      console.error('Failed to send VC panel into voice text chat:', err),
+    );
+  }
+
+  logVcEvent(guild, `\uD83C\uDD95 VC created: **${vc.name}** by **${member.user.tag}**`).catch(
+    () => {},
+  );
 }
 
 async function checkAndCleanupTempVc(oldState) {
@@ -252,11 +272,12 @@ async function checkAndCleanupTempVc(oldState) {
 
       const ownerText = meta && meta.ownerId ? ` (owner <@${meta.ownerId}>)` : '';
 
+      // Delete first; the log is a best-effort extra that must not delay it.
+      logVcEvent(
+        oldState.guild,
+        `\uD83D\uDDD1 VC auto-deleted (empty): **${leftChannel.name}**${ownerText}`,
+      ).catch(() => {});
       try {
-        await logVcEvent(
-          oldState.guild,
-          `\uD83D\uDDD1 VC auto-deleted (empty): **${leftChannel.name}**${ownerText}`,
-        );
         await leftChannel.delete('Temporary VC auto-deleted because empty');
       } catch (err) {
         console.error('Failed to delete temp VC:', err);

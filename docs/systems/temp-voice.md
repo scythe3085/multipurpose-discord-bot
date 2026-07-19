@@ -11,10 +11,11 @@ All per-server wiring is done in Discord with [`/config`](./config-and-whitelist
 ## How it works
 
 1. A member joins the configured **Join-to-Create** voice channel.
-2. The bot creates a new voice channel under the configured **VC category**, inheriting the category's permissions, then layers on the owner's overwrites (`Connect`, `ViewChannel`, `ManageChannels`).
-3. The member is moved into the new channel.
-4. A Components V2 **control panel** is sent into the new channel's text chat.
-5. When the last person leaves, the channel is deleted (after a short delay).
+2. The bot creates a new voice channel under the configured **VC category**, inheriting the category's permissions (a saved user limit is applied in the same call).
+3. The member is **moved in immediately** — one API call after creation, so the hop takes well under a second.
+4. The owner's overwrites (`Connect`, `ViewChannel`, `ManageChannels`), the bot's own overwrite, and any persistent blocklist entries are then applied **in parallel** around them, followed by a saved privacy mode.
+5. A Components V2 **control panel** is sent into the new channel's text chat.
+6. When the last person leaves, the channel is deleted (after a short delay).
 
 The bot tracks each managed channel in memory: owner, co-owners, per-channel ban list, the panel message ID, and the current privacy mode. State is restored from Discord on restart (see [Persistence & restart](#persistence--restart)).
 

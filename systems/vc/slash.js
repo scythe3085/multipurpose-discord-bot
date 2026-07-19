@@ -33,8 +33,16 @@ async function handleVoiceSlash(interaction) {
       });
     }
 
-    // Save to persistent prefs
+    // Save to persistent prefs \u2014 that's the source of truth, so confirm now
+    // and apply the best-effort overwrite/disconnect to any live VC after.
     vcPrefs.addBlockedUser(guild.id, user.id, target.id);
+
+    await interaction.reply({
+      content:
+        `\uD83D\uDEAB ${target} has been added to your VC blocklist for this server.\n` +
+        'They will be blocked from any temporary VC you own here.',
+      flags: MessageFlags.Ephemeral,
+    });
 
     // If this user currently owns a temp VC, update it immediately
     for (const [vcId, meta] of tempVoiceChannels.entries()) {
@@ -46,27 +54,27 @@ async function handleVoiceSlash(interaction) {
       meta.banned.add(target.id);
       tempVoiceChannels.set(vcId, meta);
 
-      await channel.permissionOverwrites
+      channel.permissionOverwrites
         .edit(target.id, { Connect: false, ViewChannel: true })
         .catch(() => {});
 
       const targetMember = guild.members.cache.get(target.id);
       if (targetMember?.voice?.channelId === vcId) {
-        await targetMember.voice.disconnect('Blocked from this VC by the owner.').catch(() => {});
+        targetMember.voice.disconnect('Blocked from this VC by the owner.').catch(() => {});
       }
     }
-
-    return interaction.reply({
-      content:
-        `\uD83D\uDEAB ${target} has been added to your VC blocklist for this server.\n` +
-        'They will be blocked from any temporary VC you own here.',
-      flags: MessageFlags.Ephemeral,
-    });
+    return;
   }
 
   if (sub === 'unblock') {
     const target = interaction.options.getUser('user', true);
+    // Prefs are the source of truth \u2014 confirm now, clear the live overwrite after.
     vcPrefs.removeBlockedUser(guild.id, user.id, target.id);
+
+    await interaction.reply({
+      content: `\u2705 ${target} has been removed from your VC blocklist for this server.`,
+      flags: MessageFlags.Ephemeral,
+    });
 
     const owned = findOwnedTempVcForMember(member);
     if (owned) {
@@ -75,15 +83,11 @@ async function handleVoiceSlash(interaction) {
         meta.banned.delete(target.id);
         tempVoiceChannels.set(channel.id, meta);
       }
-      try {
-        await channel.permissionOverwrites.edit(target.id, { Connect: null, ViewChannel: null });
-      } catch (_) {}
+      channel.permissionOverwrites
+        .edit(target.id, { Connect: null, ViewChannel: null })
+        .catch(() => {});
     }
-
-    return interaction.reply({
-      content: `\u2705 ${target} has been removed from your VC blocklist for this server.`,
-      flags: MessageFlags.Ephemeral,
-    });
+    return;
   }
   if (sub === 'mute') {
     const target = interaction.options.getUser('user', true);
@@ -318,10 +322,10 @@ async function handleVoiceSlash(interaction) {
       flags: MessageFlags.Ephemeral,
     });
 
-    await logVcEvent(
+    logVcEvent(
       guild,
       `\uD83E\uDD1D VC ownership for **${channel.name}** claimed by **${user.tag}** (was <@${oldOwnerId}>).`,
-    );
+    ).catch(() => {});
   }
 
   if (sub === 'friend-add') {
