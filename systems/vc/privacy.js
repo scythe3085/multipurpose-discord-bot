@@ -53,56 +53,80 @@ async function applyPrivacy(voiceChannel, guild, meta, mode) {
   const everyone = guild.roles.everyone;
   const friendIds = vcPrefs.getFriends(guild.id, meta.ownerId);
 
+  // Every edit below targets a DIFFERENT user/role overwrite (the friend loops
+  // skip owner and co-owners), so the REST calls are independent — run them in
+  // parallel instead of serially. Each is individually caught, so one failure
+  // never blocks the rest.
+  const edits = [];
+
   if (mode === 'public') {
-    await voiceChannel.permissionOverwrites
-      .edit(everyone, { Connect: true })
-      .catch(err => console.error('Privacy public: everyone overwrite failed:', err));
+    edits.push(
+      voiceChannel.permissionOverwrites
+        .edit(everyone, { Connect: true })
+        .catch(err => console.error('Privacy public: everyone overwrite failed:', err)),
+    );
 
     // Clear owner / co-owner explicit Connect — they fall back to allowed via @everyone
-    await voiceChannel.permissionOverwrites.edit(meta.ownerId, { Connect: null }).catch(() => {});
+    edits.push(
+      voiceChannel.permissionOverwrites.edit(meta.ownerId, { Connect: null }).catch(() => {}),
+    );
     for (const coId of meta.coOwners) {
-      await voiceChannel.permissionOverwrites.edit(coId, { Connect: null }).catch(() => {});
+      edits.push(voiceChannel.permissionOverwrites.edit(coId, { Connect: null }).catch(() => {}));
     }
 
     // Clear friend allows (they don't need them when public)
     for (const fid of friendIds) {
       if (meta.banned.has(fid)) continue;
       if (fid === meta.ownerId || meta.coOwners.has(fid)) continue;
-      await voiceChannel.permissionOverwrites
-        .edit(fid, { Connect: null, ViewChannel: null })
-        .catch(() => {});
+      edits.push(
+        voiceChannel.permissionOverwrites
+          .edit(fid, { Connect: null, ViewChannel: null })
+          .catch(() => {}),
+      );
     }
   } else {
     // friends or private — both deny @everyone
-    await voiceChannel.permissionOverwrites
-      .edit(everyone, { Connect: false })
-      .catch(err => console.error('Privacy lock: everyone overwrite failed:', err));
+    edits.push(
+      voiceChannel.permissionOverwrites
+        .edit(everyone, { Connect: false })
+        .catch(err => console.error('Privacy lock: everyone overwrite failed:', err)),
+    );
 
     // Owner + co-owners always allowed when locked
-    await voiceChannel.permissionOverwrites
-      .edit(meta.ownerId, { Connect: true, ViewChannel: true })
-      .catch(() => {});
+    edits.push(
+      voiceChannel.permissionOverwrites
+        .edit(meta.ownerId, { Connect: true, ViewChannel: true })
+        .catch(() => {}),
+    );
     for (const coId of meta.coOwners) {
-      await voiceChannel.permissionOverwrites
-        .edit(coId, { Connect: true, ViewChannel: true })
-        .catch(() => {});
+      edits.push(
+        voiceChannel.permissionOverwrites
+          .edit(coId, { Connect: true, ViewChannel: true })
+          .catch(() => {}),
+      );
     }
 
     for (const fid of friendIds) {
       if (meta.banned.has(fid)) continue; // block list always wins
       if (fid === meta.ownerId || meta.coOwners.has(fid)) continue; // already handled
       if (mode === 'friends') {
-        await voiceChannel.permissionOverwrites
-          .edit(fid, { Connect: true, ViewChannel: true })
-          .catch(() => {});
+        edits.push(
+          voiceChannel.permissionOverwrites
+            .edit(fid, { Connect: true, ViewChannel: true })
+            .catch(() => {}),
+        );
       } else {
         // private — friends are NOT auto-allowed
-        await voiceChannel.permissionOverwrites
-          .edit(fid, { Connect: null, ViewChannel: null })
-          .catch(() => {});
+        edits.push(
+          voiceChannel.permissionOverwrites
+            .edit(fid, { Connect: null, ViewChannel: null })
+            .catch(() => {}),
+        );
       }
     }
   }
+
+  await Promise.all(edits);
 
   meta.privacy = mode;
   tempVoiceChannels.set(voiceChannel.id, meta);
